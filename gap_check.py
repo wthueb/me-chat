@@ -146,7 +146,9 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
 
         if msg.spark:
             if msg.date.date() > last_spark:
-                # print(msg)
+                if msg.date.microsecond == 0:
+                    print(msg)
+
                 counts[msg.id].sparks += 1
 
                 last_spark = msg.date.date()
