@@ -72,6 +72,11 @@ class Message:
             and self.text.lower().strip() == "spark"
         )
 
+        self.spark_cheat = (
+            self.spark
+            and self.date.microsecond == 0
+        )
+
         self.me, self.not_me = False, False
 
         # TODO: is the me supposed to be alone?
@@ -114,11 +119,12 @@ class User:
         self.mes: int = 0
         self.not_mes: int = 0
         self.sparks: int = 0
+        self.spark_cheats: int = 0
 
     def __str__(self) -> str:
         return (
             f"{self.name}: {self.mes} mes & {self.not_mes} not mes"
-            f" ({self.mes + self.not_mes} total), {self.sparks} sparks"
+            f" ({self.mes + self.not_mes} total), {self.sparks} sparks, {self.spark_cheats} spark cheats"
         )
 
 
@@ -145,10 +151,9 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
         first_message_date = min(msg.date, first_message_date)
 
         if msg.spark:
-            if msg.date.date() > last_spark:
-                if msg.date.microsecond == 0:
-                    print(msg)
-
+            if msg.spark_cheat:
+                counts[msg.id].spark_cheats += 1
+            elif msg.date.date() > last_spark:
                 counts[msg.id].sparks += 1
 
                 last_spark = msg.date.date()
@@ -213,10 +218,10 @@ for user in sorted(
     counts.values(), key=lambda user: user.mes + user.not_mes, reverse=True
 ):
     output.append(
-        [user.name, user.mes, user.not_mes, user.mes + user.not_mes, user.sparks]
+        [user.name, user.mes, user.not_mes, user.mes + user.not_mes, user.sparks, user.spark_cheats]
     )
 
-print(tabulate(output, headers=["user", "mes", "not mes", "total", "sparks"]))
+print(tabulate(output, headers=["user", "mes", "not mes", "total", "sparks", "spark cheats"]))
 
 print(f"{sum(user.mes + user.not_mes for user in counts.values())=}")
 print(f"{len(old_meable)*3=}")
