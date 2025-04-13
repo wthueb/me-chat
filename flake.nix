@@ -27,7 +27,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              python314
+              python313
             ];
             shellHook = ''
               python -m venv env
