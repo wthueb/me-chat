@@ -10,7 +10,7 @@ from dateutil import tz
 from tabulate import tabulate
 from tqdm import tqdm
 
-from config import ADAM_EMAIL, ADAM_NUMBER, CHAT_DB_PATH, ME, USER_MAP
+from config import CHAT_DB_PATH, ID_OVERRIDES, USER_MAP
 
 plt.style.use("seaborn-v0_8-darkgrid")
 
@@ -46,11 +46,8 @@ class Message:
 
         self.id: str = row_dict["id"]
 
-        # TODO: use is_from_me
-        if self.id is None:
-            self.id = ME
-        elif self.id == ADAM_EMAIL:
-            self.id = ADAM_NUMBER
+        if self.id in ID_OVERRIDES:
+            self.id = ID_OVERRIDES[self.id]
 
         # https://www.epochconverter.com/coredata
         self.date = (
