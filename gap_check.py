@@ -1,14 +1,18 @@
+import datetime
 import re
 import shutil
 import sqlite3
-import datetime
 
-from tqdm import tqdm
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import typedstream
 from dateutil import tz
 from tabulate import tabulate
+from tqdm import tqdm
 
 from config import ADAM_EMAIL, ADAM_NUMBER, CHAT_DB_PATH, ME, USER_MAP
+
+plt.style.use("seaborn-v0_8-darkgrid")
 
 
 def from_typedstream(data: bytes) -> str:
@@ -72,10 +76,7 @@ class Message:
             and self.text.lower().strip() == "spark"
         )
 
-        self.spark_cheat = (
-            self.spark
-            and self.date.microsecond == 0
-        )
+        self.spark_cheat = self.spark and self.date.microsecond == 0
 
         self.me, self.not_me = False, False
 
@@ -104,7 +105,7 @@ class Message:
         return repr(self)
 
     def __repr__(self) -> str:
-        return f"Message(date={repr(self.date.isoformat(timespec="microseconds"))}, id={repr(USER_MAP[self.id]) if self.id in USER_MAP else repr(self.id)}, text={repr(self.text)})"
+        return f"Message(date={repr(self.date.isoformat(timespec='microseconds'))}, id={repr(USER_MAP[self.id]) if self.id in USER_MAP else repr(self.id)}, text={repr(self.text)})"
 
 
 class MeableMessage(Message):
@@ -118,6 +119,8 @@ class User:
         self.name = name
         self.mes: int = 0
         self.not_mes: int = 0
+        self.dates: list[datetime.datetime] = []
+        self.spark_dates: list[datetime.datetime] = []
         self.sparks: int = 0
         self.spark_cheats: int = 0
 
@@ -128,7 +131,7 @@ class User:
         )
 
 
-counts = {id: User(name) for id, name in USER_MAP.items()}
+users = {id: User(name) for id, name in USER_MAP.items()}
 
 meable_msgs: list[MeableMessage] = []
 old_meable: list[MeableMessage] = []
@@ -152,11 +155,13 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
 
         if msg.spark:
             if msg.spark_cheat:
-                counts[msg.id].spark_cheats += 1
+                users[msg.id].spark_cheats += 1
             elif msg.date.date() > last_spark:
-                counts[msg.id].sparks += 1
+                users[msg.id].sparks += 1
 
                 last_spark = msg.date.date()
+
+                users[msg.id].spark_dates.append(msg.date)
 
             continue
 
@@ -196,9 +201,11 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
                 meable.mes.add(msg.id)
 
                 if msg.me:
-                    counts[msg.id].mes += 1
+                    users[msg.id].mes += 1
                 else:
-                    counts[msg.id].not_mes += 1
+                    users[msg.id].not_mes += 1
+
+                users[msg.id].dates.append(msg.date)
 
                 break
 
@@ -215,16 +222,76 @@ print(f"gap check since: {first_message_date}\n")
 output: list[list] = []
 
 for user in sorted(
-    counts.values(), key=lambda user: user.mes + user.not_mes, reverse=True
+    users.values(), key=lambda user: user.mes + user.not_mes, reverse=True
 ):
     output.append(
-        [user.name, user.mes, user.not_mes, user.mes + user.not_mes, user.sparks, user.spark_cheats]
+        [
+            user.name,
+            user.mes,
+            user.not_mes,
+            user.mes + user.not_mes,
+            user.sparks,
+            user.spark_cheats,
+        ]
     )
 
-print(tabulate(output, headers=["user", "mes", "not mes", "total", "sparks", "spark cheats"]))
+print(
+    tabulate(
+        output, headers=["user", "mes", "not mes", "total", "sparks", "spark cheats"]
+    )
+)
 
-print(f"{sum(user.mes + user.not_mes for user in counts.values())=}")
+print(f"{sum(user.mes + user.not_mes for user in users.values())=}")
 print(f"{len(old_meable)*3=}")
+
+fig, axs = plt.subplots(2, 1)
+
+ax_mes: plt.Axes = axs[0]  # pyright: ignore[reportPrivateImportUsage]
+ax_sparks: plt.Axes = axs[1]  # pyright: ignore[reportPrivateImportUsage]
+
+for user in sorted(
+    users.values(), key=lambda user: user.mes + user.not_mes, reverse=True
+):
+    dates = user.dates
+    counts = [i + 1 for i in range(len(dates))]
+    dates.append(datetime.datetime.now())
+    counts.append(counts[-1])
+    ax_mes.plot(
+        user.dates,  # pyright: ignore[reportArgumentType]
+        counts,
+        label=user.name,
+    )
+
+for user in sorted(users.values(), key=lambda user: user.sparks, reverse=True):
+    dates = user.spark_dates
+    counts = [i + 1 for i in range(len(dates))]
+    dates.append(datetime.datetime.now())
+    if counts:
+        counts.append(counts[-1])
+    else:
+        counts.append(0)
+    ax_sparks.plot(
+        user.spark_dates,  # pyright: ignore[reportArgumentType]
+        counts,
+        label=user.name,
+    )
+
+quarter_year_locator = mdates.MonthLocator(interval=3)
+ax_mes.xaxis.set_major_locator(quarter_year_locator)
+ax_mes.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+ax_mes.set_xlabel("date")
+ax_mes.set_ylabel("(not) me count")
+ax_mes.legend()
+
+quarter_year_locator = mdates.MonthLocator(interval=3)
+ax_sparks.xaxis.set_major_locator(quarter_year_locator)
+ax_sparks.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+ax_sparks.set_xlabel("date")
+ax_sparks.set_ylabel("spark count")
+ax_sparks.legend()
+
+fig.suptitle(f"gap check since {first_message_date}")
+plt.show()
 
 shutil.copyfile(
     CHAT_DB_PATH, f"chat.db.since{first_message_date.strftime('%Y%m%d%H%M')}.bak"
