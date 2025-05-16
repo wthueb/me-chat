@@ -2,17 +2,19 @@ import datetime
 import re
 import shutil
 import sqlite3
+from zoneinfo import ZoneInfo
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import typedstream
-from dateutil import tz
 from tabulate import tabulate
 from tqdm import tqdm
 
-from config import CHAT_DB_PATH, ID_OVERRIDES, USER_MAP
+from config import CHAT_DB_PATH, USER_MAP
 
 plt.style.use("seaborn-v0_8-darkgrid")
+
+TZ = ZoneInfo("America/New_York")
 
 
 def from_typedstream(data: bytes) -> str:
@@ -42,30 +44,21 @@ def from_typedstream(data: bytes) -> str:
 
 class Message:
     def __init__(self, row: sqlite3.Row) -> None:
-        row_dict = dict(row)
-
-        self.id: str = row_dict["id"]
-
-        if self.id in ID_OVERRIDES:
-            self.id = ID_OVERRIDES[self.id]
+        self.id: str = row["id"]
 
         # https://www.epochconverter.com/coredata
-        self.date = (
-            datetime.datetime.fromtimestamp(
-                row_dict["date"] / 1e9 + 978_307_200, datetime.UTC
-            )
-            .replace(tzinfo=tz.tzutc())
-            .astimezone(tz.gettz("America/New_York"))
-        )
+        self.date = datetime.datetime.fromtimestamp(
+            row["date"] / 1e9 + 978_307_200, datetime.UTC
+        ).astimezone(TZ)
 
-        self.has_attachment = bool(row_dict["has_attachment"])
+        self.has_attachment = bool(row["has_attachment"])
 
         # read from attributedBody first
         # TODO: maybe switch to message_summary_info?
-        if row_dict["attributedBody"] is not None:
-            self.text = from_typedstream(row_dict["attributedBody"])
+        if row["attributedBody"] is not None:
+            self.text = from_typedstream(row["attributedBody"])
         else:
-            self.text = str(row_dict["text"])
+            self.text = str(row["text"])
 
         self.spark = (
             self.date.hour == 16
@@ -102,7 +95,7 @@ class Message:
         return repr(self)
 
     def __repr__(self) -> str:
-        return f"Message(date={repr(self.date.isoformat(timespec='microseconds'))}, id={repr(USER_MAP[self.id]) if self.id in USER_MAP else repr(self.id)}, text={repr(self.text)})"
+        return f"Message(date={repr(self.date.isoformat(timespec='microseconds'))}, id={repr(self.id)}, name={repr(USER_MAP[self.id])} text={repr(self.text)})"
 
 
 class MeableMessage(Message):
@@ -114,28 +107,38 @@ class MeableMessage(Message):
 class User:
     def __init__(self, name: str) -> None:
         self.name = name
+
         self.mes: int = 0
         self.not_mes: int = 0
         self.dates: list[datetime.datetime] = []
-        self.spark_dates: list[datetime.datetime] = []
+
         self.sparks: int = 0
+        self.spark_dates: list[datetime.datetime] = []
+
         self.spark_cheats: int = 0
 
-    def __str__(self) -> str:
-        return (
-            f"{self.name}: {self.mes} mes & {self.not_mes} not mes"
-            f" ({self.mes + self.not_mes} total), {self.sparks} sparks, {self.spark_cheats} spark cheats"
-        )
+    @property
+    def total(self) -> int:
+        return self.mes + self.not_mes
+
+    def __repr__(self) -> str:
+        return f"User(name={repr(self.name)}, mes={self.mes}, not_mes={self.not_mes}, sparks={self.sparks}, spark_cheats={self.spark_cheats})"
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, User):
+            return NotImplemented
+
+        return self.total < other.total
 
 
-users = {id: User(name) for id, name in USER_MAP.items()}
+users = {name: User(name) for name in USER_MAP.values()}
 
 meable_msgs: list[MeableMessage] = []
 old_meable: list[MeableMessage] = []
 
 last_spark = datetime.date(1, 1, 1)
 
-first_message_date = datetime.datetime.now().replace(tzinfo=tz.tzutc())
+first_message_date = datetime.datetime.now(datetime.UTC)
 
 with sqlite3.connect(CHAT_DB_PATH) as con:
     con.row_factory = sqlite3.Row
@@ -147,18 +150,21 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
 
     for row in tqdm(list(cur.execute(query))):
         msg = Message(row)
+        user = users[USER_MAP[msg.id]]
 
         first_message_date = min(msg.date, first_message_date)
 
         if msg.spark:
             if msg.spark_cheat:
-                users[msg.id].spark_cheats += 1
-            elif msg.date.date() > last_spark:
-                users[msg.id].sparks += 1
+                user.spark_cheats += 1
+                continue
+
+            if msg.date.date() > last_spark:
+                user.sparks += 1
 
                 last_spark = msg.date.date()
 
-                users[msg.id].spark_dates.append(msg.date)
+                user.spark_dates.append(msg.date)
 
             continue
 
@@ -198,11 +204,11 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
                 meable.mes.add(msg.id)
 
                 if msg.me:
-                    users[msg.id].mes += 1
+                    user.mes += 1
                 else:
-                    users[msg.id].not_mes += 1
+                    user.not_mes += 1
 
-                users[msg.id].dates.append(msg.date)
+                user.dates.append(msg.date)
 
                 break
 
@@ -218,15 +224,13 @@ print(f"gap check since: {first_message_date}\n")
 
 output: list[list] = []
 
-for user in sorted(
-    users.values(), key=lambda user: user.mes + user.not_mes, reverse=True
-):
+for user in sorted(users.values(), reverse=True):
     output.append(
         [
             user.name,
             user.mes,
             user.not_mes,
-            user.mes + user.not_mes,
+            user.total,
             user.sparks,
             user.spark_cheats,
         ]
@@ -234,11 +238,12 @@ for user in sorted(
 
 print(
     tabulate(
-        output, headers=["user", "mes", "not mes", "total", "sparks", "spark cheats"]
+        output,
+        headers=["user", "mes", "not mes", "total", "sparks", "spark cheats"],
     )
 )
 
-print(f"{sum(user.mes + user.not_mes for user in users.values())=}")
+print(f"{sum(user.total for user in users.values())=}")
 print(f"{len(old_meable)*3=}")
 
 fig, axs = plt.subplots(2, 1)
@@ -246,9 +251,7 @@ fig, axs = plt.subplots(2, 1)
 ax_mes: plt.Axes = axs[0]  # pyright: ignore[reportPrivateImportUsage]
 ax_sparks: plt.Axes = axs[1]  # pyright: ignore[reportPrivateImportUsage]
 
-for user in sorted(
-    users.values(), key=lambda user: user.mes + user.not_mes, reverse=True
-):
+for user in sorted(users.values(), reverse=True):
     dates = user.dates
     counts = [i + 1 for i in range(len(dates))]
     dates.append(datetime.datetime.now())
