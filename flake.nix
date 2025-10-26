@@ -15,15 +15,14 @@
           ]
           (
             system:
-            f rec {
+            f {
               pkgs = nixpkgs.legacyPackages.${system};
-              python = pkgs.python313;
             }
           );
     in
     {
       devShells = forAllSystems (
-        { pkgs, python }:
+        { pkgs }:
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
@@ -31,7 +30,7 @@
             ];
             env = {
               UV_PYTHON_DOWNLOADS = "never";
-              UV_PYTHON = python.interpreter;
+              UV_PYTHON = pkgs.python313.interpreter;
             };
             shellHook = ''
               uv sync

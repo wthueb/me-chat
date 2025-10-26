@@ -15,6 +15,6 @@ inner join chat on
 left join handle on
     message.handle_id = handle.ROWID
 where
-    chat.group_id = 'C1C65CF7-828E-41EF-91A8-179E80849987'
+    chat.group_id in ('647850EE-DD0A-4875-9306-BC6A8E560F16', 'C1C65CF7-828E-41EF-91A8-179E80849987')
 order by
     date asc

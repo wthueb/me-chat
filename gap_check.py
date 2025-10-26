@@ -257,7 +257,7 @@ for user in sorted(users.values(), reverse=True):
     dates.append(datetime.datetime.now())
     counts.append(counts[-1])
     ax_mes.plot(
-        user.dates,  # pyright: ignore[reportArgumentType]
+        dates,  # pyright: ignore[reportArgumentType]
         counts,
         label=user.name,
     )
@@ -271,7 +271,7 @@ for user in sorted(users.values(), key=lambda user: user.sparks, reverse=True):
     else:
         counts.append(0)
     ax_sparks.plot(
-        user.spark_dates,  # pyright: ignore[reportArgumentType]
+        dates,  # pyright: ignore[reportArgumentType]
         counts,
         label=user.name,
     )
