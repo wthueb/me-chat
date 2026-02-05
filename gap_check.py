@@ -138,7 +138,7 @@ old_meable: list[MeableMessage] = []
 
 last_spark = datetime.date(1, 1, 1)
 
-first_message_date = datetime.datetime.now(datetime.UTC)
+now = datetime.datetime.now(TZ)
 
 with sqlite3.connect(CHAT_DB_PATH) as con:
     con.row_factory = sqlite3.Row
@@ -148,13 +148,22 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
     with open("messages_query.sql", "r") as f:
         query = f.read()
 
-    for row in tqdm(list(cur.execute(query))):
+    rows = list(cur.execute(query))
+
+    first_row_date = Message(rows[0]).date
+    first_message_date = now
+
+    for row in tqdm(rows):
         msg = Message(row)
         user = users[USER_MAP[msg.id]]
 
-        first_message_date = min(msg.date, first_message_date)
+        # if msg.date < datetime.datetime(2024, 1, 1, tzinfo=TZ):
+        #     continue
+
+        first_message_date = min(first_message_date, msg.date)
 
         if msg.spark:
+            # print(msg)
             if msg.spark_cheat:
                 user.spark_cheats += 1
                 continue
@@ -177,10 +186,10 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
             # meable_msgs = [
             #     meable
             #     for meable in meable_msgs
-            #     if msg.date < meable.date + timedelta(hours=24) and len(meable.mes) < 3  # noqa
+            #     if msg.date < meable.date + timedelta(hours=24) and len(meable.mes) < 3
             # ]
 
-            new_meable = []
+            new_meable: list[MeableMessage] = []
             for meable in meable_msgs:
                 if msg.date < meable.date + datetime.timedelta(hours=24):
                     new_meable.append(meable)
@@ -222,7 +231,7 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
 
 print(f"gap check since: {first_message_date}\n")
 
-output: list[list] = []
+output: list[list[str | int]] = []
 
 for user in sorted(users.values(), reverse=True):
     output.append(
@@ -246,15 +255,18 @@ print(
 print(f"{sum(user.total for user in users.values())=}")
 print(f"{len(old_meable)*3=}")
 
-fig, axs = plt.subplots(2, 1)
+fig_totals, axs_totals = plt.subplots(2, 1)
+fig_rates, axs_rates = plt.subplots(2, 1)
 
-ax_mes: plt.Axes = axs[0]  # pyright: ignore[reportPrivateImportUsage]
-ax_sparks: plt.Axes = axs[1]  # pyright: ignore[reportPrivateImportUsage]
+ax_mes: plt.Axes = axs_totals[0]  # pyright: ignore[reportPrivateImportUsage]
+ax_me_rate: plt.Axes = axs_rates[0]  # pyright: ignore[reportPrivateImportUsage]
+ax_sparks: plt.Axes = axs_totals[1]  # pyright: ignore[reportPrivateImportUsage]
+ax_spark_rate: plt.Axes = axs_rates[1]  # pyright: ignore[reportPrivateImportUsage]
 
 for user in sorted(users.values(), reverse=True):
     dates = user.dates
     counts = [i + 1 for i in range(len(dates))]
-    dates.append(datetime.datetime.now())
+    dates.append(now)
     counts.append(counts[-1])
     ax_mes.plot(
         dates,  # pyright: ignore[reportArgumentType]
@@ -262,37 +274,99 @@ for user in sorted(users.values(), reverse=True):
         label=user.name,
     )
 
+    month_counts: dict[datetime.datetime, int] = {}
+    for date in dates:
+        month = date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_counts[month] = month_counts.get(month, 0) + 1
+
+    months: list[datetime.date] = []
+    counts: list[int] = []
+    month = first_message_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    while month <= now.replace(day=1, hour=0, minute=0, second=0, microsecond=0):
+        months.append(month)
+        counts.append(month_counts.get(month, 0))
+        if month.month == 12:
+            month = month.replace(year=month.year + 1, month=1)
+        else:
+            month = month.replace(month=month.month + 1)
+
+    ax_me_rate.plot(
+        months,  # pyright: ignore[reportArgumentType]
+        counts,
+        label=user.name,
+    )
+
 for user in sorted(users.values(), key=lambda user: user.sparks, reverse=True):
     dates = user.spark_dates
     counts = [i + 1 for i in range(len(dates))]
-    dates.append(datetime.datetime.now())
+    dates.append(now)
+
     if counts:
         counts.append(counts[-1])
     else:
         counts.append(0)
+
     ax_sparks.plot(
         dates,  # pyright: ignore[reportArgumentType]
         counts,
         label=user.name,
     )
 
+    month_counts = {}
+    for date in dates:
+        month = date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_counts[month] = month_counts.get(month, 0) + 1
+
+    months = []
+    counts = []
+
+    month = first_message_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    while month <= now.replace(day=1, hour=0, minute=0, second=0, microsecond=0):
+        months.append(month)
+        counts.append(month_counts.get(month, 0))
+        if month.month == 12:
+            month = month.replace(year=month.year + 1, month=1)
+        else:
+            month = month.replace(month=month.month + 1)
+
+    ax_spark_rate.plot(
+        months,  # pyright: ignore[reportArgumentType]
+        counts,
+        label=user.name,
+    )
+
 quarter_year_locator = mdates.MonthLocator(interval=3)
+date_formatter = mdates.DateFormatter("%Y-%m")
+
 ax_mes.xaxis.set_major_locator(quarter_year_locator)
-ax_mes.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+ax_mes.xaxis.set_major_formatter(date_formatter)
 ax_mes.set_xlabel("date")
 ax_mes.set_ylabel("(not) me count")
 ax_mes.legend()
 
-quarter_year_locator = mdates.MonthLocator(interval=3)
+ax_me_rate.xaxis.set_major_locator(quarter_year_locator)
+ax_me_rate.xaxis.set_major_formatter(date_formatter)
+ax_me_rate.set_xlabel("date")
+ax_me_rate.set_ylabel("me rate per month")
+ax_me_rate.legend()
+
 ax_sparks.xaxis.set_major_locator(quarter_year_locator)
-ax_sparks.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+ax_sparks.xaxis.set_major_formatter(date_formatter)
 ax_sparks.set_xlabel("date")
 ax_sparks.set_ylabel("spark count")
 ax_sparks.legend()
 
-fig.suptitle(f"gap check since {first_message_date}")
+ax_spark_rate.xaxis.set_major_locator(quarter_year_locator)
+ax_spark_rate.xaxis.set_major_formatter(date_formatter)
+ax_spark_rate.set_xlabel("date")
+ax_spark_rate.set_ylabel("spark rate per month")
+ax_spark_rate.legend()
+
+fig_totals.suptitle(f"gap check since {first_message_date}")
+fig_rates.suptitle(f"gap check since {first_message_date}")
 plt.show()
 
 shutil.copyfile(
-    CHAT_DB_PATH, f"chat.db.since{first_message_date.strftime('%Y%m%d%H%M')}.bak"
+    CHAT_DB_PATH, f"chat.db.since{first_row_date.strftime('%Y%m%d%H%M')}.bak"
 )
