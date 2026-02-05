@@ -2,6 +2,8 @@ import datetime
 import re
 import shutil
 import sqlite3
+from collections import Counter
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 import matplotlib.dates as mdates
@@ -15,11 +17,13 @@ from config import CHAT_DB_PATH, USER_MAP
 plt.style.use("seaborn-v0_8-darkgrid")
 
 TZ = ZoneInfo("America/New_York")
+MAX_ME_COUNT = 3
+MEABLE_TIMEOUT_HOURS = 24
+SELF_ME_DELAY_SECONDS = 30
 
 
 def from_typedstream(data: bytes) -> str:
     ts = typedstream.stream.TypedStreamReader.from_data(data)
-
     unarchiver = typedstream.Unarchiver(ts)
     root = unarchiver.decode_single_root()
 
@@ -30,16 +34,14 @@ def from_typedstream(data: bytes) -> str:
         and isinstance(obj.value, typedstream.types.foundation.NSString)
     ]
 
-    if strings:
-        # multiple strings in the body, that doesn't make sense
-        if len(strings) > 1:
-            raise ValueError(strings)
+    if not strings:
+        raise ValueError(f"{data=} doesn't have a string in it")
 
-        typed_value: typedstream.types.foundation.NSString = strings[0].value
+    if len(strings) > 1:
+        raise ValueError(strings)
 
-        return typed_value.value
-
-    raise ValueError(f"{data=} doesn't have a string in it")
+    typed_value: typedstream.types.foundation.NSString = strings[0].value
+    return typed_value.value
 
 
 class Message:
@@ -55,10 +57,11 @@ class Message:
 
         # read from attributedBody first
         # TODO: maybe switch to message_summary_info?
-        if row["attributedBody"] is not None:
-            self.text = from_typedstream(row["attributedBody"])
-        else:
-            self.text = str(row["text"])
+        self.text = (
+            from_typedstream(row["attributedBody"])
+            if row["attributedBody"] is not None
+            else str(row["text"])
+        )
 
         self.spark = (
             self.date.hour == 16
@@ -68,11 +71,12 @@ class Message:
 
         self.spark_cheat = self.spark and self.date.microsecond == 0
 
-        self.me, self.not_me = False, False
+        self.me = False
+        self.not_me = False
 
         # TODO: is the me supposed to be alone?
         if match := re.search(r"^\s*(not)?\s*me\W*$", self.text, re.IGNORECASE):
-            if match.groups()[0] is None:
+            if match.group(1) is None:
                 self.me = True
             else:
                 self.not_me = True
@@ -88,8 +92,6 @@ class Message:
             or re.search(r"https?://", self.text, re.IGNORECASE)
             or re.search(r"^Wordle \d+ \d", self.text)
         )
-
-        #  print(", ".join(map(str, row)))
 
     def __str__(self) -> str:
         return repr(self)
@@ -129,6 +131,67 @@ class User:
             return NotImplemented
 
         return self.total < other.total
+
+
+def _get_month_start(date: datetime.datetime) -> datetime.datetime:
+    return date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _increment_month(month: datetime.datetime) -> datetime.datetime:
+    if month.month == 12:
+        return month.replace(year=month.year + 1, month=1)
+    return month.replace(month=month.month + 1)
+
+
+def _generate_monthly_counts(
+    dates: list[datetime.datetime],
+    start_date: datetime.datetime,
+    end_date: datetime.datetime,
+) -> tuple[list[datetime.date], list[int]]:
+    month_counts = Counter(_get_month_start(date) for date in dates)
+
+    months: list[datetime.date] = []
+    counts: list[int] = []
+    month = _get_month_start(start_date)
+    end_month = _get_month_start(end_date)
+
+    while month <= end_month:
+        months.append(month)
+        counts.append(month_counts[month])
+        month = _increment_month(month)
+
+    return months, counts
+
+
+def _filter_meable_messages(
+    meable_msgs: list[MeableMessage],
+    predicate: Callable[[MeableMessage], bool],
+) -> tuple[list[MeableMessage], list[MeableMessage]]:
+    kept: list[MeableMessage] = []
+    removed: list[MeableMessage] = []
+
+    for meable in meable_msgs:
+        if predicate(meable):
+            kept.append(meable)
+        else:
+            removed.append(meable)
+
+    return kept, removed
+
+
+def _format_axes(
+    ax: plt.Axes,  # pyright: ignore[reportPrivateImportUsage]
+    xlabel: str,
+    ylabel: str,
+) -> None:
+    locator = mdates.MonthLocator(interval=3)
+    formatter = mdates.DateFormatter("%Y-%m")
+
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.legend()
 
 
 users = {name: User(name) for name in USER_MAP.values()}
@@ -183,19 +246,12 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
 
         if msg.me or msg.not_me:
             # remove meable that are 24+ hours old
-            # meable_msgs = [
-            #     meable
-            #     for meable in meable_msgs
-            #     if msg.date < meable.date + timedelta(hours=24) and len(meable.mes) < 3
-            # ]
-
-            new_meable: list[MeableMessage] = []
-            for meable in meable_msgs:
-                if msg.date < meable.date + datetime.timedelta(hours=24):
-                    new_meable.append(meable)
-                else:
-                    old_meable.append(meable)
-            meable_msgs = new_meable
+            meable_msgs, old_removed = _filter_meable_messages(
+                meable_msgs,
+                lambda m: msg.date
+                < m.date + datetime.timedelta(hours=MEABLE_TIMEOUT_HOURS),
+            )
+            old_meable.extend(old_removed)
 
             for meable in sorted(meable_msgs, key=lambda m: m.date):
                 # if already me'd, look at next message
@@ -206,7 +262,8 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
                 if (
                     msg.id == meable.id
                     and len(meable.mes) == 0
-                    and msg.date < meable.date + datetime.timedelta(seconds=30)
+                    and msg.date
+                    < meable.date + datetime.timedelta(seconds=SELF_ME_DELAY_SECONDS)
                 ):
                     continue
 
@@ -221,29 +278,17 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
 
                 break
 
-            new_meable = []
-            for meable in meable_msgs:
-                if len(meable.mes) < 3:
-                    new_meable.append(meable)
-                else:
-                    old_meable.append(meable)
-            meable_msgs = new_meable
+            meable_msgs, full_removed = _filter_meable_messages(
+                meable_msgs, lambda m: len(m.mes) < MAX_ME_COUNT
+            )
+            old_meable.extend(full_removed)
 
 print(f"gap check since: {first_message_date}\n")
 
-output: list[list[str | int]] = []
-
-for user in sorted(users.values(), reverse=True):
-    output.append(
-        [
-            user.name,
-            user.mes,
-            user.not_mes,
-            user.total,
-            user.sparks,
-            user.spark_cheats,
-        ]
-    )
+output: list[list[str | int]] = [
+    [user.name, user.mes, user.not_mes, user.total, user.sparks, user.spark_cheats]
+    for user in sorted(users.values(), reverse=True)
+]
 
 print(
     tabulate(
@@ -253,7 +298,7 @@ print(
 )
 
 print(f"{sum(user.total for user in users.values())=}")
-print(f"{len(old_meable)*3=}")
+print(f"{len(old_meable) * 3=}")
 
 fig_totals, axs_totals = plt.subplots(2, 1)
 fig_rates, axs_rates = plt.subplots(2, 1)
@@ -267,33 +312,22 @@ for user in sorted(users.values(), reverse=True):
     dates = user.dates
     counts = [i + 1 for i in range(len(dates))]
     dates.append(now)
-    counts.append(counts[-1])
+
+    if counts:
+        counts.append(counts[-1])
+    else:
+        counts.append(0)
+
     ax_mes.plot(
         dates,  # pyright: ignore[reportArgumentType]
         counts,
         label=user.name,
     )
 
-    month_counts: dict[datetime.datetime, int] = {}
-    for date in dates:
-        month = date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        month_counts[month] = month_counts.get(month, 0) + 1
-
-    months: list[datetime.date] = []
-    counts: list[int] = []
-    month = first_message_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    while month <= now.replace(day=1, hour=0, minute=0, second=0, microsecond=0):
-        months.append(month)
-        counts.append(month_counts.get(month, 0))
-        if month.month == 12:
-            month = month.replace(year=month.year + 1, month=1)
-        else:
-            month = month.replace(month=month.month + 1)
-
+    months, monthly_counts = _generate_monthly_counts(dates, first_message_date, now)
     ax_me_rate.plot(
         months,  # pyright: ignore[reportArgumentType]
-        counts,
+        monthly_counts,
         label=user.name,
     )
 
@@ -313,55 +347,17 @@ for user in sorted(users.values(), key=lambda user: user.sparks, reverse=True):
         label=user.name,
     )
 
-    month_counts = {}
-    for date in dates:
-        month = date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        month_counts[month] = month_counts.get(month, 0) + 1
-
-    months = []
-    counts = []
-
-    month = first_message_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    while month <= now.replace(day=1, hour=0, minute=0, second=0, microsecond=0):
-        months.append(month)
-        counts.append(month_counts.get(month, 0))
-        if month.month == 12:
-            month = month.replace(year=month.year + 1, month=1)
-        else:
-            month = month.replace(month=month.month + 1)
-
+    months, monthly_counts = _generate_monthly_counts(dates, first_message_date, now)
     ax_spark_rate.plot(
         months,  # pyright: ignore[reportArgumentType]
-        counts,
+        monthly_counts,
         label=user.name,
     )
 
-quarter_year_locator = mdates.MonthLocator(interval=3)
-date_formatter = mdates.DateFormatter("%Y-%m")
-
-ax_mes.xaxis.set_major_locator(quarter_year_locator)
-ax_mes.xaxis.set_major_formatter(date_formatter)
-ax_mes.set_xlabel("date")
-ax_mes.set_ylabel("(not) me count")
-ax_mes.legend()
-
-ax_me_rate.xaxis.set_major_locator(quarter_year_locator)
-ax_me_rate.xaxis.set_major_formatter(date_formatter)
-ax_me_rate.set_xlabel("date")
-ax_me_rate.set_ylabel("me rate per month")
-ax_me_rate.legend()
-
-ax_sparks.xaxis.set_major_locator(quarter_year_locator)
-ax_sparks.xaxis.set_major_formatter(date_formatter)
-ax_sparks.set_xlabel("date")
-ax_sparks.set_ylabel("spark count")
-ax_sparks.legend()
-
-ax_spark_rate.xaxis.set_major_locator(quarter_year_locator)
-ax_spark_rate.xaxis.set_major_formatter(date_formatter)
-ax_spark_rate.set_xlabel("date")
-ax_spark_rate.set_ylabel("spark rate per month")
-ax_spark_rate.legend()
+_format_axes(ax_mes, "date", "(not) me count")
+_format_axes(ax_me_rate, "date", "me rate per month")
+_format_axes(ax_sparks, "date", "spark count")
+_format_axes(ax_spark_rate, "date", "spark rate per month")
 
 fig_totals.suptitle(f"gap check since {first_message_date}")
 fig_rates.suptitle(f"gap check since {first_message_date}")
