@@ -119,6 +119,9 @@ class User:
 
         self.spark_cheats: int = 0
 
+        self.meable_message_count: int = 0
+        self.own_mes_count: int = 0
+
     @property
     def total(self) -> int:
         return self.mes + self.not_mes
@@ -220,10 +223,13 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
         msg = Message(row)
         user = users[USER_MAP[msg.id]]
 
-        # if msg.date < datetime.datetime(2024, 1, 1, tzinfo=TZ):
+        # if msg.date < datetime.datetime(2026, 1, 1, tzinfo=TZ):
         #     continue
 
         first_message_date = min(first_message_date, msg.date)
+
+        # if "spark" in msg.text.lower():
+        #     print(msg)
 
         if msg.spark:
             # print(msg)
@@ -241,6 +247,7 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
             continue
 
         if msg.meable:
+            user.meable_message_count += 1
             meable_msgs.append(MeableMessage(row))
             continue
 
@@ -269,6 +276,9 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
 
                 meable.mes.add(msg.id)
 
+                if msg.id == meable.id:
+                    user.own_mes_count += 1
+
                 if msg.me:
                     user.mes += 1
                 else:
@@ -285,15 +295,37 @@ with sqlite3.connect(CHAT_DB_PATH) as con:
 
 print(f"gap check since: {first_message_date}\n")
 
-output: list[list[str | int]] = [
-    [user.name, user.mes, user.not_mes, user.total, user.sparks, user.spark_cheats]
+output: list[list[str | int | float]] = [
+    [
+        user.name,
+        user.mes,
+        user.not_mes,
+        user.total,
+        user.sparks,
+        user.spark_cheats,
+        user.meable_message_count,
+        user.own_mes_count,
+        user.own_mes_count / user.meable_message_count * 100
+        if user.meable_message_count > 0
+        else "-",
+    ]
     for user in sorted(users.values(), reverse=True)
 ]
 
 print(
     tabulate(
         output,
-        headers=["user", "mes", "not mes", "total", "sparks", "spark cheats"],
+        headers=[
+            "user",
+            "mes",
+            "not mes",
+            "total",
+            "sparks",
+            "spark cheats",
+            "meable messages",
+            "own mes",
+            "own mes %",
+        ],
     )
 )
 
