@@ -11,7 +11,7 @@ use sqlx::sqlite::SqlitePool;
 use tabled::{Table, Tabled};
 
 use crate::{
-    message::{Meable, Message},
+    message::{MeableMessage, Message, MessageKind},
     user::get_users,
 };
 
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
 
     let pool = SqlitePool::connect(&format!("sqlite://{}?mode=ro", chat_db_path)).await?;
 
-    let mut meable_msgs: Vec<Meable> = Vec::new();
+    let mut meable_msgs: Vec<MeableMessage> = Vec::new();
     let mut possible_mes = 0;
     let mut last_spark = DateTime::from_timestamp_nanos(0).date_naive();
 
@@ -56,81 +56,80 @@ async fn main() -> Result<()> {
         let has_attachment: i32 = row.try_get("has_attachment")?;
         let balloon_bundle_id: Option<String> = row.try_get("balloon_bundle_id")?;
 
+        let user_name = users.id_mapping.get(&id).unwrap();
+
         let msg = Message::from_row(
             date_ns,
             id.clone(),
+            user_name.to_string(),
             text,
             attributed_body,
             has_attachment,
             balloon_bundle_id,
         )?;
 
-        let user_name = users.id_mapping.get(&id).unwrap();
-        let user = users.by_name.get_mut(user_name).unwrap();
+        let user = users.by_name.get_mut(&msg.name).unwrap();
 
-        match msg {
-            Message::Me(ref m) | Message::NotMe(ref m) | Message::Meable(Meable { message: ref m, ..}) | Message::Spark(ref m) | Message::SparkCheat(ref m) | Message::Normal(ref m) => {
-                first_message_date = first_message_date.min(m.date);
+        first_message_date = first_message_date.min(msg.date);
 
-                if m.text.to_lowercase().contains("spark") {
-                    // println!("{:?}", m);
-                }
-            }
+        // println!("{:?}", msg);
+        if msg.text.to_lowercase().contains("spark") {
+            // println!("{:?}", msg);
         }
 
-        match msg {
-            Message::Spark(m) => {
-                if m.date.date_naive() > last_spark {
+        match msg.kind {
+            MessageKind::Spark => {
+                if msg.date.date_naive() > last_spark {
                     user.sparks += 1;
-                    last_spark = m.date.date_naive();
+                    last_spark = msg.date.date_naive();
                 }
                 continue;
             },
-            Message::SparkCheat(_) => {
+            MessageKind::SparkCheat => {
                 user.spark_cheats += 1;
                 continue;
             },
-            Message::Meable(m) => {
+            MessageKind::Meable { .. } => {
                 user.meable_message_count += 1;
-                meable_msgs.push(m);
+                meable_msgs.push(msg.try_into().unwrap());
                 possible_mes += MAX_ME_COUNT;
                 continue;
             },
-            Message::Me(ref m) | Message::NotMe(ref m) => {
-                meable_msgs.retain(|meable| m.date < meable.message.date + MEABLE_TIMEOUT);
+            MessageKind::Me | MessageKind::NotMe => {
+                meable_msgs.retain(|meable| msg.date < meable.date + MEABLE_TIMEOUT);
 
-                meable_msgs.sort_by_key(|meable| meable.message.date);
+                meable_msgs.sort_by_key(|meable| meable.date);
 
                 for meable in &mut meable_msgs {
-                    if meable.mes.contains(&id) {
+                    if meable.mes().contains(&id) {
                         continue;
                     }
 
-                    if meable.mes.is_empty()
-                        && id == meable.message.id
-                        && m.date < meable.message.date + SELF_ME_DELAY
+                    if meable.mes().is_empty()
+                        && id == meable.id
+                        && msg.date < meable.date + SELF_ME_DELAY
                     {
                         continue;
                     }
 
-                    meable.mes.push(id.clone());
+                    meable.mes_mut().push(id.clone());
 
-                    if id == meable.message.id {
+                    if id == meable.id {
                         user.own_mes_count += 1;
                     }
 
-                    match msg {
-                        Message::Me(_) => user.mes += 1,
-                        Message::NotMe(_) => user.not_mes += 1,
+                    match msg.kind {
+                        MessageKind::Me => user.mes += 1,
+                        MessageKind::NotMe => user.not_mes += 1,
                         _ => unreachable!(),
                     }
 
                     break;
                 }
 
-                meable_msgs.retain(|meable| meable.mes.len() < MAX_ME_COUNT);
+                meable_msgs.retain(|meable| meable.mes().len() < MAX_ME_COUNT);
             },
-            Message::Normal(_) => {},
+            MessageKind::Normal => {},
         }
     }
 

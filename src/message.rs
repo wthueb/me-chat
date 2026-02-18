@@ -4,7 +4,7 @@ use chrono_tz::America::New_York;
 use color_eyre::eyre::{self, Context};
 use crabstep::TypedStreamDeserializer;
 use regex::Regex;
-use std::{collections::HashSet, sync::LazyLock};
+use std::{collections::HashSet, ops::Deref, sync::LazyLock};
 
 use crate::typedstream::{as_nsdictionary, as_nsstring, as_signed_integer};
 
@@ -28,32 +28,29 @@ static MEABLE_META_KEYS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 });
 
 #[derive(Debug, Clone)]
-pub struct MessageData {
+pub struct Message {
     pub id: String,
+    pub name: String,
     pub date: DateTime<chrono_tz::Tz>,
     pub text: String,
+    pub kind: MessageKind,
 }
 
-#[derive(Debug)]
-pub struct Meable {
-    pub message: MessageData,
-    pub mes: ArrayVec<String, 3>,
-}
-
-#[derive(Debug)]
-pub enum Message {
-    Normal(MessageData),
-    Me(MessageData),
-    NotMe(MessageData),
-    Meable(Meable),
-    Spark(MessageData),
-    SparkCheat(MessageData),
+#[derive(Debug, Clone)]
+pub enum MessageKind {
+    Normal,
+    Me,
+    NotMe,
+    Meable { mes: ArrayVec<String, 3> },
+    Spark,
+    SparkCheat,
 }
 
 impl Message {
     pub fn from_row(
         coredata_ns: i64,
         id: String,
+        name: String,
         text: Option<String>,
         attributed_body: Option<&[u8]>,
         has_attachment: i32,
@@ -68,46 +65,91 @@ impl Message {
             (text.unwrap_or_default(), false)
         };
 
-        if date.hour() == 16 && date.minute() == 20 && text.to_lowercase().trim() == "spark" {
-            if date.timestamp_subsec_nanos() == 0 {
-                return Ok(Message::SparkCheat(MessageData { id, date, text }));
-            }
-            return Ok(Message::Spark(MessageData { id, date, text }));
-        }
-
-        meable = meable
-            || (has_attachment != 0
-                && (balloon_bundle_id.is_none()
-                    || !balloon_bundle_id.as_ref().unwrap().contains("gamepigeon")))
-            || URL_REGEX.is_match(&text)
-            || WORDLE_REGEX.is_match(&text);
-
-        if meable {
-            return Ok(Message::Meable(Meable {
-                message: MessageData { id, date, text },
-                mes: ArrayVec::new(),
-            }));
-        }
-
-        let (me, not_me) = if let Some(captures) = ME_REGEX.captures(&text) {
-            if captures.get(1).is_some() {
-                (false, true)
+        let kind =
+            if date.hour() == 16 && date.minute() == 20 && text.to_lowercase().trim() == "spark" {
+                if date.timestamp_subsec_nanos() == 0 {
+                    MessageKind::SparkCheat
+                } else {
+                    MessageKind::Spark
+                }
             } else {
-                (true, false)
-            }
-        } else {
-            (false, false)
-        };
+                meable = meable
+                    || (has_attachment != 0
+                        && (balloon_bundle_id.is_none()
+                            || !balloon_bundle_id.as_ref().unwrap().contains("gamepigeon")))
+                    || URL_REGEX.is_match(&text)
+                    || WORDLE_REGEX.is_match(&text);
 
-        if me {
-            return Ok(Message::Me(MessageData { id, date, text }));
+                if meable {
+                    MessageKind::Meable {
+                        mes: ArrayVec::new(),
+                    }
+                } else {
+                    let (me, not_me) = if let Some(captures) = ME_REGEX.captures(&text) {
+                        if captures.get(1).is_some() {
+                            (false, true)
+                        } else {
+                            (true, false)
+                        }
+                    } else {
+                        (false, false)
+                    };
+
+                    if me {
+                        MessageKind::Me
+                    } else if not_me {
+                        MessageKind::NotMe
+                    } else {
+                        MessageKind::Normal
+                    }
+                }
+            };
+
+        Ok(Message {
+            id,
+            name,
+            date,
+            text,
+            kind,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct MeableMessage(Message);
+
+impl MeableMessage {
+    pub fn mes(&self) -> &ArrayVec<String, 3> {
+        match &self.0.kind {
+            MessageKind::Meable { mes } => mes,
+            _ => unreachable!(),
         }
+    }
 
-        if not_me {
-            return Ok(Message::NotMe(MessageData { id, date, text }));
+    pub fn mes_mut(&mut self) -> &mut ArrayVec<String, 3> {
+        match &mut self.0.kind {
+            MessageKind::Meable { mes } => mes,
+            _ => unreachable!(),
         }
+    }
+}
 
-        Ok(Message::Normal(MessageData { id, date, text }))
+impl TryFrom<Message> for MeableMessage {
+    type Error = &'static str;
+
+    fn try_from(msg: Message) -> Result<Self, Self::Error> {
+        match msg.kind {
+            MessageKind::Meable { .. } => Ok(MeableMessage(msg)),
+            _ => Err("message is not of kind meable"),
+        }
+    }
+}
+
+impl Deref for MeableMessage {
+    type Target = Message;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -160,13 +202,14 @@ fn test_url() -> color_eyre::Result<()> {
     let message = Message::from_row(
         0,
         "1".to_string(),
+        "".to_string(),
         Some("Check this out: https://example.com".to_string()),
         None,
         0,
         None,
     )?;
 
-    assert!(matches!(message, Message::Meable(_)));
+    assert!(matches!(message.kind, MessageKind::Meable { .. }));
 
     Ok(())
 }
