@@ -2,10 +2,15 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    inputs@{ flake-parts, ... }:
+    inputs@{ flake-parts, rust-overlay, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "x86_64-linux"
@@ -13,21 +18,25 @@
         "aarch64-linux"
         "aarch64-darwin"
       ];
+
       perSystem =
-        { pkgs, ... }:
+        { system, pkgs, ... }:
         {
+          _module.args.pkgs = import inputs.nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
+
           devShells.default = pkgs.mkShell {
-            packages = with pkgs; [
-              uv
+            packages = [
+              (pkgs.rust-bin.stable.latest.default.override {
+                extensions = [
+                  "rust-src"
+                  "rust-analyzer"
+                ];
+              })
+              pkgs.cargo-edit
             ];
-            env = {
-              UV_PYTHON_DOWNLOADS = "never";
-              UV_PYTHON = pkgs.python313.interpreter;
-            };
-            shellHook = ''
-              uv sync
-              source .venv/bin/activate
-            '';
           };
         };
     };

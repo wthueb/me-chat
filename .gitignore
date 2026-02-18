@@ -1,2 +1,4 @@
 chat.db*
-config.py
+users.json
+target/
+.env

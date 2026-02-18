@@ -1,7 +1,7 @@
 # TODO
 
-- is_audio_message are probably meable
-- is_emote meable?
+- make sure raw emojis are meable
+- tests would be useful
 - if count since meable msg is more than X msgs (or time?), me has to be a reply
     - reply has reply_to_guid
 - "clear" copy pastas (hard if not impossible. big juicy llm to detect maybe? probably wouldn't get the niche ones)
