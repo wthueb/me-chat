@@ -1,10 +1,9 @@
-use arrayvec::ArrayVec;
 use chrono::{DateTime, Timelike};
 use chrono_tz::America::New_York;
 use color_eyre::eyre::{self, Context};
 use crabstep::TypedStreamDeserializer;
 use regex::Regex;
-use std::{collections::HashSet, ops::Deref, sync::LazyLock};
+use std::{collections::HashSet, sync::LazyLock};
 
 use crate::typedstream::{as_nsdictionary, as_nsstring, as_signed_integer};
 
@@ -21,18 +20,20 @@ static MEABLE_META_KEYS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "__kIMInlineMediaWidthAttributeName",
         "__kIMLinkAttributeName",
         "__kIMLinkIsRichLinkAttributeName",
-        "__kIMDataDetectedAttributeName",
+        // "__kIMDataDetectedAttributeName",
         "IMAudioTranscription",
         // TODO: figure out when this is clickable "__kIMCalendarEventAttributeName",
     ])
 });
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Message {
+    pub guid: String,
     pub id: String,
-    pub name: String,
     pub date: DateTime<chrono_tz::Tz>,
     pub text: String,
+    pub thread_originator_guid: Option<String>,
     pub kind: MessageKind,
 }
 
@@ -41,28 +42,32 @@ pub enum MessageKind {
     Normal,
     Me,
     NotMe,
-    Meable { mes: ArrayVec<String, 3> },
+    Meable,
     Spark,
     SparkCheat,
 }
 
-impl Message {
-    pub fn from_row(
-        coredata_ns: i64,
-        id: String,
-        name: String,
-        text: Option<String>,
-        attributed_body: Option<&[u8]>,
-        has_attachment: i32,
-        balloon_bundle_id: Option<String>,
-    ) -> color_eyre::Result<Self> {
-        let date = DateTime::from_timestamp_nanos(coredata_ns + CORE_DATA_EPOCH * 1_000_000_000)
-            .with_timezone(&New_York);
+pub struct MessageRow<'a> {
+    pub guid: String,
+    pub coredata_ns: i64,
+    pub id: String,
+    pub text: Option<String>,
+    pub attributed_body: Option<&'a [u8]>,
+    pub has_attachment: bool,
+    pub balloon_bundle_id: Option<String>,
+    pub thread_originator_guid: Option<String>,
+}
 
-        let (text, mut meable) = if let Some(body) = attributed_body {
+impl Message {
+    pub fn from_row(row: MessageRow) -> color_eyre::Result<Self> {
+        let date =
+            DateTime::from_timestamp_nanos(row.coredata_ns + CORE_DATA_EPOCH * 1_000_000_000)
+                .with_timezone(&New_York);
+
+        let (text, mut meable) = if let Some(body) = row.attributed_body {
             parse_attributed_body(body)?
         } else {
-            (text.unwrap_or_default(), false)
+            (row.text.unwrap_or_default(), false)
         };
 
         let kind =
@@ -74,16 +79,18 @@ impl Message {
                 }
             } else {
                 meable = meable
-                    || (has_attachment != 0
-                        && (balloon_bundle_id.is_none()
-                            || !balloon_bundle_id.as_ref().unwrap().contains("gamepigeon")))
+                    || (row.has_attachment
+                        && (row.balloon_bundle_id.is_none()
+                            || !row
+                                .balloon_bundle_id
+                                .as_ref()
+                                .unwrap()
+                                .contains("gamepigeon")))
                     || URL_REGEX.is_match(&text)
                     || WORDLE_REGEX.is_match(&text);
 
                 if meable {
-                    MessageKind::Meable {
-                        mes: ArrayVec::new(),
-                    }
+                    MessageKind::Meable
                 } else {
                     let (me, not_me) = if let Some(captures) = ME_REGEX.captures(&text) {
                         if captures.get(1).is_some() {
@@ -106,50 +113,13 @@ impl Message {
             };
 
         Ok(Message {
-            id,
-            name,
+            guid: row.guid,
+            id: row.id,
             date,
             text,
+            thread_originator_guid: row.thread_originator_guid.clone(),
             kind,
         })
-    }
-}
-
-#[derive(Debug)]
-pub struct MeableMessage(Message);
-
-impl MeableMessage {
-    pub fn mes(&self) -> &ArrayVec<String, 3> {
-        match &self.0.kind {
-            MessageKind::Meable { mes } => mes,
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn mes_mut(&mut self) -> &mut ArrayVec<String, 3> {
-        match &mut self.0.kind {
-            MessageKind::Meable { mes } => mes,
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl TryFrom<Message> for MeableMessage {
-    type Error = &'static str;
-
-    fn try_from(msg: Message) -> Result<Self, Self::Error> {
-        match msg.kind {
-            MessageKind::Meable { .. } => Ok(MeableMessage(msg)),
-            _ => Err("message is not of kind meable"),
-        }
-    }
-}
-
-impl Deref for MeableMessage {
-    type Target = Message;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -199,17 +169,18 @@ fn parse_attributed_body(body: &[u8]) -> color_eyre::Result<(String, bool)> {
 
 #[test]
 fn test_url() -> color_eyre::Result<()> {
-    let message = Message::from_row(
-        0,
-        "1".to_string(),
-        "".to_string(),
-        Some("Check this out: https://example.com".to_string()),
-        None,
-        0,
-        None,
-    )?;
+    let message = Message::from_row(MessageRow {
+        guid: "".to_string(),
+        coredata_ns: 0,
+        id: "1".to_string(),
+        text: Some("Check this out: https://example.com".to_string()),
+        attributed_body: None,
+        has_attachment: false,
+        balloon_bundle_id: None,
+        thread_originator_guid: None,
+    })?;
 
-    assert!(matches!(message.kind, MessageKind::Meable { .. }));
+    assert!(matches!(message.kind, MessageKind::Meable));
 
     Ok(())
 }
