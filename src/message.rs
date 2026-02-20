@@ -263,7 +263,7 @@ mod tests {
                 | "recv_double_emoji" => {
                     assert!(matches!(msg.kind, MessageKind::Meable));
                 }
-                "send_normal" | "recv_normal" | "reaction" => {
+                "send_normal" | "recv_normal" => {
                     assert!(matches!(msg.kind, MessageKind::Normal));
                 }
                 _ => panic!("unexpected message guid"),

@@ -55,8 +55,7 @@ async fn main() -> Result<()> {
             message.attributedBody,
             message.cache_has_attachments as has_attachment,
             message.balloon_bundle_id,
-            message.thread_originator_guid,
-            message.associated_message_guid
+            message.thread_originator_guid
         from
             message
         inner join chat_message_join on
@@ -71,6 +70,7 @@ async fn main() -> Result<()> {
                 'C1C65CF7-828E-41EF-91A8-179E80849987',
                 '46324139453632322D394641332D343032442D394433452D413341413544414335313843'
             )
+            and message.associated_message_guid is null -- exclude reactions and stickers
         order by
             date asc
         "#
@@ -87,11 +87,6 @@ async fn main() -> Result<()> {
 
     while let Some(row) = rows.next().await.transpose()? {
         pb.inc(1);
-
-        if row.associated_message_guid.is_some() {
-            // reaction
-            continue;
-        }
 
         let msg = Message::from_row(MessageRow {
             guid: row.guid,
