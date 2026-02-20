@@ -7,7 +7,7 @@ use std::time::Duration;
 use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
 use chrono_tz::America::New_York;
-use color_eyre::{Result, eyre};
+use color_eyre::eyre::{self, Result, eyre};
 use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use sqlx::sqlite::SqlitePool;
@@ -31,9 +31,6 @@ async fn main() -> Result<()> {
     let chat_db_path =
         std::env::var("CHAT_DB_PATH").expect("CHAT_DB_PATH environment variable not set");
 
-    let fallback_id =
-        std::env::var("FALLBACK_ID").expect("FALLBACK_ID environment variable not set");
-
     let mut users = get_users()?;
 
     let pool = SqlitePool::connect(&format!("sqlite:{}?mode=ro", chat_db_path)).await?;
@@ -45,14 +42,15 @@ async fn main() -> Result<()> {
     let now = Utc::now().with_timezone(&New_York);
     let mut first_message_date = now;
 
-    let mut rows = sqlx::query!(
+    let mut rows = sqlx::query_as!(
+        MessageRow,
         r#"
         select
             message.guid,
             message.date,
             handle.id,
             message.text,
-            message.attributedBody,
+            message.attributedBody as attributed_body,
             message.cache_has_attachments as has_attachment,
             message.balloon_bundle_id,
             message.thread_originator_guid
@@ -88,27 +86,18 @@ async fn main() -> Result<()> {
     while let Some(row) = rows.next().await.transpose()? {
         pb.inc(1);
 
-        let msg = Message::from_row(MessageRow {
-            guid: row.guid,
-            coredata_ns: row.date.unwrap(),
-            id: row.id.unwrap_or_else(|| fallback_id.clone()),
-            text: row.text,
-            attributed_body: row.attributedBody,
-            has_attachment: row.has_attachment.unwrap_or(0) != 0,
-            balloon_bundle_id: row.balloon_bundle_id,
-            thread_originator_guid: row.thread_originator_guid,
-        })?;
+        let msg: Message = row.try_into()?;
 
         meable_msgs.iter_mut().for_each(|m| m.msgs_since += 1);
 
         let sender = users
             .id_mapping
             .get(&msg.id)
-            .ok_or_else(|| eyre::eyre!("unknown user id: {}", msg.id))?;
+            .ok_or_else(|| eyre!("unknown user id: {}", msg.id))?;
         let user = users
             .by_name
             .get_mut(sender)
-            .ok_or_else(|| eyre::eyre!("user not found: {}", sender))?;
+            .ok_or_else(|| eyre!("user not found: {}", sender))?;
 
         first_message_date = first_message_date.min(msg.date);
 
@@ -141,7 +130,7 @@ async fn main() -> Result<()> {
                     let meable_sender = users
                         .id_mapping
                         .get(&meable.msg.id)
-                        .ok_or_else(|| eyre::eyre!("unknown user id: {}", meable.msg.id))?;
+                        .ok_or_else(|| eyre!("unknown user id: {}", meable.msg.id))?;
 
                     match msg.kind {
                         MessageKind::Me | MessageKind::NotMe => {}
@@ -178,12 +167,12 @@ async fn main() -> Result<()> {
 
                 let mut med = false;
 
-                if let Some(thread_originator_guid) = msg.thread_originator_guid {
+                if let Some(ref thread_originator_guid) = msg.thread_originator_guid {
                     // me is a reply
                     if let Some(meable) = meable_msgs.iter_mut().find(|meable| {
-                        meable.msg.guid == thread_originator_guid
-                            || meable.msg.thread_originator_guid
-                                == Some(thread_originator_guid.clone())
+                        &meable.msg.guid == thread_originator_guid
+                            || meable.msg.thread_originator_guid.as_ref()
+                                == Some(thread_originator_guid)
                     }) {
                         med = try_to_me(meable)?;
                     }
@@ -265,7 +254,7 @@ impl TryFrom<Message> for MeableMessage {
                 mes: ArrayVec::new(),
                 msgs_since: 0,
             }),
-            _ => Err(eyre::eyre!("message is not meable")),
+            _ => Err(eyre!("message is not meable")),
         }
     }
 }

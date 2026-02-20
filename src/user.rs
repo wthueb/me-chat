@@ -1,7 +1,4 @@
-use color_eyre::{
-    Result,
-    eyre::{self, Context},
-};
+use color_eyre::eyre::{self, Context, Result};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
