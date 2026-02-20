@@ -140,7 +140,6 @@ impl SparkType {
 }
 
 fn is_meable(row: &MessageRow, body: &AttributedBody) -> bool {
-    static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)https?://").unwrap());
     static WORDLE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Wordle \d+ \d").unwrap());
     static MEABLE_META_KEYS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         HashSet::from([
@@ -167,13 +166,13 @@ fn is_meable(row: &MessageRow, body: &AttributedBody) -> bool {
                     .as_ref()
                     .unwrap()
                     .contains("gamepigeon")))
-        || URL_REGEX.is_match(&body.text)
         || WORDLE_REGEX.is_match(&body.text)
         || is_emoji_only(&body.text)
 }
 
 fn is_emoji_only(text: &str) -> bool {
-    // https://unicode.org/reports/tr51/#EBNF_and_Regex https://github.com/BurntSushi/ripgrep/discussions/1623#discussioncomment-28827
+    // https://unicode.org/reports/tr51/#EBNF_and_Regex
+    // https://github.com/BurntSushi/ripgrep/discussions/1623#discussioncomment-28827
     static EMOJI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^(\p{RI}\p{RI}|\p{Emoji}(\p{EMod}|\x{FE0F}\x{20E3}?|[\x{E0020}-\x{E007E}]+\x{E007F})?(\x{200D}\p{Emoji}(\p{EMod}|\x{FE0F}\x{20E3}?|[\x{E0020}-\x{E007E}]+\x{E007F})?)*)+$").unwrap()
     });

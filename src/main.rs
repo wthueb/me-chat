@@ -102,9 +102,9 @@ async fn main() -> Result<()> {
         first_message_date = first_message_date.min(msg.date);
 
         // println!("{:?}", msg);
-        if msg.text.to_lowercase().contains("spark") {
-            // println!("{:?}", msg);
-        }
+        // if msg.text.to_lowercase().contains("spark") {
+        //     println!("{:?}", msg);
+        // }
 
         match msg.kind {
             MessageKind::Spark => {
