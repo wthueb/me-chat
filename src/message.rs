@@ -38,6 +38,7 @@ pub struct Message {
     pub text: String,
     pub thread_originator_guid: Option<String>,
     pub kind: MessageKind,
+    pub attributes: Option<HashSet<String>>,
 }
 
 #[derive(Debug)]
@@ -66,19 +67,27 @@ impl Message {
     pub fn from_row(row: MessageRow) -> color_eyre::Result<Self> {
         let date = from_coredata_ns(row.coredata_ns);
 
-        let (text, mut meable) = if let Some(body) = row.attributed_body {
-            parse_attributed_body(&body)?
-        } else {
-            (row.text.unwrap_or_default(), false)
-        };
+        let body = row
+            .attributed_body
+            .as_ref()
+            .map(|b| parse_attributed_body(b))
+            .transpose()?
+            .unwrap_or_else(|| AttributedBody {
+                text: row.text.unwrap_or_default(),
+                attributes: None,
+            });
 
-        let kind = if let Some(spark_type) = is_spark(date, &text) {
+        let kind = if let Some(spark_type) = is_spark(date, &body.text) {
             match spark_type {
                 SparkType::Spark => MessageKind::Spark,
                 SparkType::SparkCheat => MessageKind::SparkCheat,
             }
         } else {
-            meable = meable
+            let meable = body
+                .attributes
+                .as_ref()
+                .map(|a| MEABLE_META_KEYS.iter().any(|k| a.contains(*k)))
+                .unwrap_or(false)
                 || (row.has_attachment
                     && (row.balloon_bundle_id.is_none()
                         || !row
@@ -86,14 +95,14 @@ impl Message {
                             .as_ref()
                             .unwrap()
                             .contains("gamepigeon")))
-                || URL_REGEX.is_match(&text)
-                || WORDLE_REGEX.is_match(&text)
-                || is_emoji_only(&text);
+                || URL_REGEX.is_match(&body.text)
+                || WORDLE_REGEX.is_match(&body.text)
+                || is_emoji_only(&body.text);
 
             if meable {
                 MessageKind::Meable
             } else {
-                let (me, not_me) = if let Some(captures) = ME_REGEX.captures(&text) {
+                let (me, not_me) = if let Some(captures) = ME_REGEX.captures(&body.text) {
                     if captures.get(1).is_some() {
                         (false, true)
                     } else {
@@ -117,9 +126,10 @@ impl Message {
             guid: row.guid,
             id: row.id,
             date,
-            text,
+            text: body.text,
             thread_originator_guid: row.thread_originator_guid,
             kind,
+            attributes: body.attributes,
         })
     }
 }
@@ -154,7 +164,14 @@ fn is_emoji_only(text: &str) -> bool {
         && EMOJI_REGEX.is_match(text)
 }
 
-fn parse_attributed_body(body: &[u8]) -> color_eyre::Result<(String, bool)> {
+#[derive(Debug)]
+struct AttributedBody {
+    text: String,
+    attributes: Option<HashSet<String>>,
+}
+
+// TODO: parse attributedBody into its own struct so we can extract more information from it
+fn parse_attributed_body(body: &[u8]) -> color_eyre::Result<AttributedBody> {
     let mut deserializer = TypedStreamDeserializer::new(body);
     let mut props = deserializer
         .iter_root()
@@ -167,6 +184,8 @@ fn parse_attributed_body(body: &[u8]) -> color_eyre::Result<(String, bool)> {
         .and_then(as_nsstring)
         .ok_or_else(|| eyre::eyre!("first property not a NSString"))?
         .to_string();
+
+    let mut attributes: HashSet<String> = HashSet::new();
 
     for mut prop in props {
         if let Some(dict) = as_nsdictionary(&mut prop) {
@@ -184,9 +203,7 @@ fn parse_attributed_body(body: &[u8]) -> color_eyre::Result<(String, bool)> {
                     .ok_or_else(|| eyre::eyre!("expected string key in dictionary"))?
                     .to_string();
 
-                if MEABLE_META_KEYS.contains(key.as_str()) {
-                    return Ok((text, true));
-                }
+                attributes.insert(key);
 
                 let _value = dict
                     .next()
@@ -195,7 +212,10 @@ fn parse_attributed_body(body: &[u8]) -> color_eyre::Result<(String, bool)> {
         }
     }
 
-    Ok((text, false))
+    Ok(AttributedBody {
+        text,
+        attributes: Some(attributes),
+    })
 }
 
 #[cfg(test)]
@@ -203,18 +223,89 @@ mod tests {
     use super::*;
     use color_eyre::eyre::Result;
 
+    static ROWS: LazyLock<Vec<serde_json::Value>> = LazyLock::new(|| {
+        const TEST_FILE_PATH: &str = "tests/messages.json";
+        let file = std::fs::File::open(TEST_FILE_PATH)
+            .unwrap_or_else(|_| panic!("failed to open {}", TEST_FILE_PATH));
+        serde_json::from_reader(file)
+            .unwrap_or_else(|_| panic!("failed to parse {}", TEST_FILE_PATH))
+    });
+
     #[test]
     fn test_meable() -> Result<()> {
-        let file = std::fs::File::open("tests/meable.json")?;
+        assert!(matches!(
+            parse_test_messasge("send_single_emoji")?.kind,
+            MessageKind::Meable
+        ));
+        assert!(matches!(
+            parse_test_messasge("recv_single_emoji")?.kind,
+            MessageKind::Meable
+        ));
+        assert!(matches!(
+            parse_test_messasge("send_double_emoji")?.kind,
+            MessageKind::Meable
+        ));
+        assert!(matches!(
+            parse_test_messasge("recv_double_emoji")?.kind,
+            MessageKind::Meable
+        ));
+        assert!(matches!(
+            parse_test_messasge("send_normal")?.kind,
+            MessageKind::Normal
+        ));
+        assert!(matches!(
+            parse_test_messasge("recv_normal")?.kind,
+            MessageKind::Normal
+        ));
 
-        let rows: Vec<serde_json::Value> = serde_json::from_reader(file)?;
+        Ok(())
+    }
 
-        for row in rows {
-            let guid = row
-                .get("guid")
+    #[test]
+    fn test_parse_attributed_body() -> Result<()> {
+        let row = get_msg_json("recv_single_emoji").unwrap();
+
+        let attributed_body = row
+            .get("attributedBody")
+            .and_then(|v| v.as_str())
+            .map(|s| s.strip_prefix("0x").unwrap_or(s))
+            .map(hex::decode)
+            .transpose()?
+            .unwrap();
+
+        let body = parse_attributed_body(&attributed_body)?;
+
+        println!("{:?}", body);
+
+        assert_eq!(body.text, "😭");
+        assert_eq!(
+            body.attributes.unwrap(),
+            HashSet::from(["__kIMMessagePartAttributeName".to_string()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_emoji_regex() {
+        assert!(is_emoji_only("😂"));
+        assert!(!is_emoji_only("ascii"));
+        assert!(!is_emoji_only("😂ascii"));
+        assert!(!is_emoji_only("0"));
+        assert!(!is_emoji_only("***"));
+        assert!(!is_emoji_only("###"));
+    }
+
+    fn get_msg_json(guid: &str) -> Option<&'static serde_json::Value> {
+        ROWS.iter().find(|row| {
+            row.get("guid")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap();
+                .map(|s| s == guid)
+                .unwrap_or(false)
+        })
+    }
+
+    fn parse_test_messasge(guid: &str) -> Result<Message> {
+        if let Some(row) = get_msg_json(guid) {
             let coredata_ns = row.get("date").and_then(|v| v.as_i64()).unwrap();
             let id = row
                 .get("id")
@@ -245,7 +336,7 @@ mod tests {
                 .map(|s| s.to_string());
 
             let msg = Message::from_row(MessageRow {
-                guid,
+                guid: guid.to_string(),
                 coredata_ns,
                 id,
                 text,
@@ -257,29 +348,12 @@ mod tests {
 
             println!("{:?}", msg);
 
-            // match by guid
-            match msg.guid.as_str() {
-                "send_single_emoji" | "recv_single_emoji" | "send_double_emoji"
-                | "recv_double_emoji" => {
-                    assert!(matches!(msg.kind, MessageKind::Meable));
-                }
-                "send_normal" | "recv_normal" => {
-                    assert!(matches!(msg.kind, MessageKind::Normal));
-                }
-                _ => panic!("unexpected message guid"),
-            }
+            Ok(msg)
+        } else {
+            Err(eyre::eyre!(
+                "message with guid {} not found in test data",
+                guid
+            ))
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_emoji_regex() {
-        assert!(is_emoji_only("😂"));
-        assert!(!is_emoji_only("ascii"));
-        assert!(!is_emoji_only("😂ascii"));
-        assert!(!is_emoji_only("0"));
-        assert!(!is_emoji_only("***"));
-        assert!(!is_emoji_only("###"));
     }
 }

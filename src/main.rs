@@ -131,6 +131,7 @@ async fn main() -> Result<()> {
             }
             MessageKind::Meable => {
                 user.meable_message_count += 1;
+                // println!("{:?}", msg);
                 meable_msgs.push(msg.try_into().unwrap());
                 possible_mes += MAX_ME_COUNT;
                 continue;
