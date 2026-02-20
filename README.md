@@ -1,7 +1,6 @@
 # TODO
 
 - verify missed meable messages are actually meable (have to figure out algorithm to find the root cause first probably)
-- make sure raw emojis are meable
 - fix edit gate
     - edit history contained in `message_summary_info`, a binary plist with values of typedstream objects
         - https://stackoverflow.com/questions/74579463/how-to-decode-message-summary-info-in-macos-messages-chat-db

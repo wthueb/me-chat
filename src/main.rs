@@ -21,21 +21,22 @@ use crate::{
 const MAX_ME_COUNT: usize = 3;
 const MEABLE_TIMEOUT_COUNT: usize = 20;
 const SELF_ME_DELAY: Duration = Duration::from_secs(30);
+const BACKUP_PATH_FORMAT: &str = "./chat.db.since%Y%m%d%H%M.bak";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
     dotenvy::dotenv().ok();
 
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL environment variable not set");
+    let chat_db_path =
+        std::env::var("CHAT_DB_PATH").expect("CHAT_DB_PATH environment variable not set");
 
     let fallback_id =
         std::env::var("FALLBACK_ID").expect("FALLBACK_ID environment variable not set");
 
     let mut users = get_users()?;
 
-    let pool = SqlitePool::connect(&database_url).await?;
+    let pool = SqlitePool::connect(&format!("sqlite:{}?mode=ro", chat_db_path)).await?;
 
     let mut meable_msgs: Vec<MeableMessage> = Vec::new();
     let mut possible_mes = 0;
@@ -97,18 +98,22 @@ async fn main() -> Result<()> {
             coredata_ns: row.date.unwrap(),
             id: row.id.unwrap_or_else(|| fallback_id.clone()),
             text: row.text,
-            attributed_body: row.attributedBody.as_deref(),
+            attributed_body: row.attributedBody,
             has_attachment: row.has_attachment.unwrap_or(0) != 0,
             balloon_bundle_id: row.balloon_bundle_id,
             thread_originator_guid: row.thread_originator_guid,
         })?;
 
-        for meable in &mut meable_msgs {
-            meable.msgs_since += 1;
-        }
+        meable_msgs.iter_mut().for_each(|m| m.msgs_since += 1);
 
-        let sender = users.id_mapping.get(&msg.id).unwrap();
-        let user = users.by_name.get_mut(sender).unwrap();
+        let sender = users
+            .id_mapping
+            .get(&msg.id)
+            .ok_or_else(|| eyre::eyre!("unknown user id: {}", msg.id))?;
+        let user = users
+            .by_name
+            .get_mut(sender)
+            .ok_or_else(|| eyre::eyre!("user not found: {}", sender))?;
 
         first_message_date = first_message_date.min(msg.date);
 
@@ -136,17 +141,20 @@ async fn main() -> Result<()> {
                 continue;
             }
             MessageKind::Me | MessageKind::NotMe => {
-                let mut try_to_me = |meable: &mut MeableMessage| {
-                    let meable_sender = users.id_mapping.get(&meable.msg.id).unwrap();
+                let mut try_to_me = |meable: &mut MeableMessage| -> Result<bool> {
+                    let meable_sender = users
+                        .id_mapping
+                        .get(&meable.msg.id)
+                        .ok_or_else(|| eyre::eyre!("unknown user id: {}", meable.msg.id))?;
 
                     match msg.kind {
                         MessageKind::Me | MessageKind::NotMe => {}
-                        _ => return false,
+                        _ => return Ok(false),
                     }
 
                     // already me'd
                     if meable.mes.contains(sender) {
-                        return false;
+                        return Ok(false);
                     }
 
                     // can't self me within the delay period unless it's already been me'd
@@ -154,12 +162,10 @@ async fn main() -> Result<()> {
                         && sender == meable_sender
                         && msg.date < meable.msg.date + SELF_ME_DELAY
                     {
-                        return false;
+                        return Ok(false);
                     }
 
-                    meable.mes.push(sender.clone());
-
-                    let user = users.by_name.get_mut(sender).unwrap();
+                    meable.mes.push(sender.to_string());
 
                     if sender == meable_sender {
                         user.own_mes_count += 1;
@@ -171,29 +177,35 @@ async fn main() -> Result<()> {
                         _ => unreachable!(),
                     }
 
-                    true
+                    Ok(true)
                 };
 
-                if let Some(thread_originator_guid) = msg.thread_originator_guid
-                    && let Some(meable) = meable_msgs.iter_mut().find(|meable| {
+                let mut med = false;
+
+                if let Some(thread_originator_guid) = msg.thread_originator_guid {
+                    // me is a reply
+                    if let Some(meable) = meable_msgs.iter_mut().find(|meable| {
                         meable.msg.guid == thread_originator_guid
                             || meable.msg.thread_originator_guid
                                 == Some(thread_originator_guid.clone())
-                    })
-                {
-                    try_to_me(meable);
+                    }) {
+                        med = try_to_me(meable)?;
+                    }
                 } else {
                     for meable in meable_msgs
                         .iter_mut()
                         .filter(|meable| meable.msgs_since - 1 <= MEABLE_TIMEOUT_COUNT)
                     {
-                        if try_to_me(meable) {
+                        if try_to_me(meable)? {
+                            med = true;
                             break;
                         }
                     }
                 }
 
-                meable_msgs.retain(|meable| meable.mes.len() < MAX_ME_COUNT);
+                if med {
+                    meable_msgs.retain(|meable| meable.mes.len() < MAX_ME_COUNT);
+                }
             }
             MessageKind::Normal => {}
         }
@@ -234,6 +246,9 @@ async fn main() -> Result<()> {
 
     pool.close().await;
 
+    let backup_path = first_message_date.format(BACKUP_PATH_FORMAT).to_string();
+    std::fs::copy(&chat_db_path, backup_path)?;
+
     Ok(())
 }
 
@@ -244,13 +259,13 @@ struct MeableMessage {
     msgs_since: usize,
 }
 
-impl TryInto<MeableMessage> for Message {
+impl TryFrom<Message> for MeableMessage {
     type Error = eyre::Report;
 
-    fn try_into(self) -> Result<MeableMessage> {
-        match self.kind {
+    fn try_from(msg: Message) -> Result<MeableMessage> {
+        match msg.kind {
             MessageKind::Meable => Ok(MeableMessage {
-                msg: self,
+                msg,
                 mes: ArrayVec::new(),
                 msgs_since: 0,
             }),

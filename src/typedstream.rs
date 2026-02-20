@@ -34,12 +34,15 @@ pub fn as_signed_integer(property: &Property<'_, '_>) -> Option<i64> {
         let mut iter = group.iter();
         let val = iter.next()?;
         if let Property::Primitive(OutputData::SignedInteger(value)) = val {
-            return Some(*value);
+            Some(*value)
         } else if let Property::Object { name, data, .. } = val
             && *name == "NSNumber"
         {
-            return as_signed_integer(&data.clone().next()?);
+            as_signed_integer(&data.clone().next()?)
+        } else {
+            None
         }
+    } else {
+        None
     }
-    None
 }

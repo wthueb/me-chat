@@ -4,7 +4,7 @@ use color_eyre::{
 };
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct User {
     pub name: String,
     pub mes: usize,
@@ -19,19 +19,16 @@ impl User {
     pub fn new(name: String) -> Self {
         User {
             name,
-            mes: 0,
-            not_mes: 0,
-            sparks: 0,
-            spark_cheats: 0,
-            meable_message_count: 0,
-            own_mes_count: 0,
+            ..Default::default()
         }
     }
 
+    #[must_use]
     pub fn total(&self) -> usize {
         self.mes + self.not_mes
     }
 
+    #[must_use]
     pub fn own_mes_percent(&self) -> String {
         if self.meable_message_count > 0 {
             format!(
