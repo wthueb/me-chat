@@ -1,22 +1,16 @@
-mod message;
-mod typedstream;
-mod user;
-
 use std::time::Duration;
 
-use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
 use chrono_tz::America::New_York;
-use color_eyre::eyre::{self, Result, eyre};
+use color_eyre::eyre::{Result, eyre};
 use futures::StreamExt;
-use indicatif::{ProgressBar, ProgressStyle};
-use sqlx::sqlite::SqlitePool;
-use tabled::{Table, Tabled};
-
-use crate::{
-    message::{Message, MessageKind, MessageRow},
+use gap_check::{
+    db::get_db_query,
+    message::{MeableMessage, MessageKind},
     user::get_users,
 };
+use indicatif::{ProgressBar, ProgressStyle};
+use tabled::{Table, Tabled};
 
 const MAX_ME_COUNT: usize = 3;
 const MEABLE_TIMEOUT_COUNT: usize = 20;
@@ -28,12 +22,7 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     dotenvy::dotenv().ok();
 
-    let chat_db_path =
-        std::env::var("CHAT_DB_PATH").expect("CHAT_DB_PATH environment variable not set");
-
     let mut users = get_users()?;
-
-    let pool = SqlitePool::connect(&format!("sqlite:{}?mode=ro", chat_db_path)).await?;
 
     let mut meable_msgs: Vec<MeableMessage> = Vec::new();
     let mut possible_mes = 0;
@@ -41,39 +30,6 @@ async fn main() -> Result<()> {
 
     let now = Utc::now().with_timezone(&New_York);
     let mut first_message_date = now;
-
-    let mut rows = sqlx::query_as!(
-        MessageRow,
-        r#"
-        select
-            message.guid,
-            message.date,
-            handle.id,
-            message.text,
-            message.attributedBody as attributed_body,
-            message.cache_has_attachments as has_attachment,
-            message.balloon_bundle_id,
-            message.thread_originator_guid
-        from
-            message
-        inner join chat_message_join on
-            message.ROWID = chat_message_join.message_id
-        inner join chat on
-            chat_message_join.chat_id = chat.ROWID
-        left join handle on
-            message.handle_id = handle.ROWID
-        where
-            chat.group_id in (
-                '647850EE-DD0A-4875-9306-BC6A8E560F16',
-                'C1C65CF7-828E-41EF-91A8-179E80849987',
-                '46324139453632322D394641332D343032442D394433452D413341413544414335313843'
-            )
-            and message.associated_message_guid is null -- exclude reactions and stickers
-        order by
-            date asc
-        "#
-    )
-    .fetch(&pool);
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(
@@ -83,10 +39,11 @@ async fn main() -> Result<()> {
     );
     pb.enable_steady_tick(Duration::from_millis(100));
 
-    while let Some(row) = rows.next().await.transpose()? {
-        pb.inc(1);
+    let query = get_db_query().await?;
+    let mut stream = query.as_stream();
 
-        let msg: Message = row.try_into()?;
+    while let Some(msg) = stream.next().await.transpose()? {
+        pb.inc(1);
 
         meable_msgs.iter_mut().for_each(|m| m.msgs_since += 1);
 
@@ -229,34 +186,12 @@ async fn main() -> Result<()> {
     let total_mes: usize = users.by_name.values().map(|u| u.total()).sum();
     println!("{}/{}", total_mes, possible_mes);
 
-    pool.close().await;
+    query.drop().await;
 
     let backup_path = first_message_date.format(BACKUP_PATH_FORMAT).to_string();
-    std::fs::copy(&chat_db_path, backup_path)?;
+    std::fs::copy(std::env::var("CHAT_DB_PATH").unwrap(), backup_path)?;
 
     Ok(())
-}
-
-#[derive(Debug)]
-struct MeableMessage {
-    msg: Message,
-    mes: ArrayVec<String, 3>,
-    msgs_since: usize,
-}
-
-impl TryFrom<Message> for MeableMessage {
-    type Error = eyre::Report;
-
-    fn try_from(msg: Message) -> Result<MeableMessage> {
-        match msg.kind {
-            MessageKind::Meable => Ok(MeableMessage {
-                msg,
-                mes: ArrayVec::new(),
-                msgs_since: 0,
-            }),
-            _ => Err(eyre!("message is not meable")),
-        }
-    }
 }
 
 #[derive(Tabled)]

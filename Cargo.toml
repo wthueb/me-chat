@@ -2,6 +2,7 @@
 name = "gap-check"
 version = "0.1.0"
 edition = "2024"
+default-run = "gap-check"
 
 [dependencies]
 arrayvec = "0.7.6"
@@ -24,3 +25,6 @@ hex = "0.4.3"
 
 [profile.dev.package.backtrace]
 opt-level = 3
+
+[profile.release]
+debug = true

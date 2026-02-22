@@ -36,6 +36,7 @@
                 ];
               })
               pkgs.cargo-edit
+              pkgs.cargo-flamegraph
             ];
           };
         };

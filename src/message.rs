@@ -1,3 +1,4 @@
+use arrayvec::ArrayVec;
 use chrono::{DateTime, Timelike};
 use chrono_tz::{America::New_York, Tz};
 use color_eyre::eyre::{self, Context, Result, eyre};
@@ -5,7 +6,10 @@ use crabstep::TypedStreamDeserializer;
 use regex::Regex;
 use std::{collections::HashSet, sync::LazyLock};
 
-use crate::typedstream::{as_nsdictionary, as_nsstring, as_signed_integer};
+use crate::{
+    db::MessageRow,
+    typedstream::{as_nsdictionary, as_nsstring, as_signed_integer},
+};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -54,18 +58,6 @@ impl MessageKind {
 
         MessageKind::Normal
     }
-}
-
-#[derive(Debug)]
-pub struct MessageRow {
-    pub guid: String,
-    pub date: Option<i64>,
-    pub id: Option<String>,
-    pub text: Option<String>,
-    pub attributed_body: Option<Vec<u8>>,
-    pub has_attachment: Option<i64>,
-    pub balloon_bundle_id: Option<String>,
-    pub thread_originator_guid: Option<String>,
 }
 
 impl TryFrom<MessageRow> for Message {
@@ -141,36 +133,42 @@ impl SparkType {
 
 fn is_meable(row: &MessageRow, body: &AttributedBody) -> bool {
     static WORDLE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Wordle \d+ \d").unwrap());
-    static MEABLE_META_KEYS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-        HashSet::from([
-            "__kIMFileTransferGUIDAttributeName",
-            "__kIMInlineMediaHeightAttributeName",
-            "__kIMFilenameAttributeName",
-            "__kIMInlineMediaWidthAttributeName",
-            "__kIMLinkAttributeName",
-            "__kIMLinkIsRichLinkAttributeName",
-            // "__kIMDataDetectedAttributeName",
-            "IMAudioTranscription",
-            // TODO: figure out when this is clickable "__kIMCalendarEventAttributeName",
-        ])
+    static MEABLE_ATTRIBUTES: LazyLock<[HashSet<&'static str>; 5]> = LazyLock::new(|| {
+        [
+            HashSet::from(["__kIMFileTransferGUIDAttributeName"]), // images/videos/other files
+            HashSet::from(["__kIMLinkAttributeName", "__kIMDataDetectedAttributeName"]), // links
+            HashSet::from(["__kIMLinkAttributeName", "__kIMPhoneNumberAttributeName"]), // phone numbers
+            HashSet::from(["__kIMLinkAttributeName", "__kIMAddressAttributeName"]),     // addresses
+            HashSet::from([
+                "__kIMBreadcrumbTextMarkerAttributeName",
+                "__kIMBreadcrumbTextOptionFlags",
+            ]), // sent via icloud breadcrumb?
+        ]
     });
 
-    body.attributes
-        .as_ref()
-        .map(|a| a.iter().any(|k| MEABLE_META_KEYS.contains(k.as_str())))
-        .unwrap_or(false)
-        || (row.has_attachment.unwrap_or(0) != 0
-            && (row.balloon_bundle_id.is_none()
-                || !row
-                    .balloon_bundle_id
-                    .as_ref()
-                    .unwrap()
-                    .contains("gamepigeon")))
+    if let Some(attributes) = &body.attributes {
+        let attributes = attributes
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<HashSet<_>>();
+
+        if MEABLE_ATTRIBUTES.iter().any(|a| a.is_subset(&attributes)) {
+            return true;
+        }
+    }
+
+    (row.has_attachment.unwrap_or(0) != 0
+        && (row.balloon_bundle_id.is_none()
+            || !row
+                .balloon_bundle_id
+                .as_ref()
+                .unwrap()
+                .contains("gamepigeon")))
         || WORDLE_REGEX.is_match(&body.text)
         || is_emoji_only(&body.text)
 }
 
-fn is_emoji_only(text: &str) -> bool {
+pub fn is_emoji_only(text: &str) -> bool {
     // https://unicode.org/reports/tr51/#EBNF_and_Regex
     // https://github.com/BurntSushi/ripgrep/discussions/1623#discussioncomment-28827
     static EMOJI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -235,6 +233,28 @@ impl AttributedBody {
             text,
             attributes: Some(attributes),
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct MeableMessage {
+    pub msg: Message,
+    pub mes: ArrayVec<String, 3>,
+    pub msgs_since: usize,
+}
+
+impl TryFrom<Message> for MeableMessage {
+    type Error = eyre::Report;
+
+    fn try_from(msg: Message) -> Result<MeableMessage> {
+        match msg.kind {
+            MessageKind::Meable => Ok(MeableMessage {
+                msg,
+                mes: ArrayVec::new(),
+                msgs_since: 0,
+            }),
+            _ => Err(eyre!("message is not meable")),
+        }
     }
 }
 
