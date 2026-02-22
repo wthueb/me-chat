@@ -260,83 +260,36 @@ impl TryFrom<Message> for MeableMessage {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
-
-    static ROWS: LazyLock<Vec<MessageRow>> = LazyLock::new(|| {
-        const TEST_FILE_PATH: &str = "tests/messages.json";
-        let file = std::fs::File::open(TEST_FILE_PATH)
-            .unwrap_or_else(|_| panic!("failed to open {}", TEST_FILE_PATH));
-        let stream: Vec<serde_json::Value> = serde_json::from_reader(file)
-            .unwrap_or_else(|_| panic!("failed to parse {}", TEST_FILE_PATH));
-
-        stream
-            .into_iter()
-            .map(|row| MessageRow {
-                guid: row
-                    .get("guid")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_default(),
-                date: row.get("date").and_then(|v| v.as_i64()),
-                id: row
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                text: row
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                attributed_body: row
-                    .get("attributedBody")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.strip_prefix("0x").unwrap_or(s))
-                    .map(hex::decode)
-                    .transpose()
-                    .unwrap_or_else(|_| {
-                        panic!(
-                            "failed to decode attributed body for guid {}",
-                            row.get("guid")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("<unknown>")
-                        )
-                    }),
-                has_attachment: row.get("has_attachment").and_then(|v| v.as_i64()),
-                balloon_bundle_id: row
-                    .get("balloon_bundle_id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                thread_originator_guid: row
-                    .get("thread_originator_guid")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-            })
-            .collect()
-    });
 
     #[test]
     fn test_meable() -> Result<()> {
+        let file = TestFile::new("tests/messages.json")?;
+
         assert!(matches!(
-            parse_test_msg("send_single_emoji")?.kind,
+            file.get_msg("send_single_emoji")?.kind,
             MessageKind::Meable
         ));
         assert!(matches!(
-            parse_test_msg("recv_single_emoji")?.kind,
+            file.get_msg("recv_single_emoji")?.kind,
             MessageKind::Meable
         ));
         assert!(matches!(
-            parse_test_msg("send_double_emoji")?.kind,
+            file.get_msg("send_double_emoji")?.kind,
             MessageKind::Meable
         ));
         assert!(matches!(
-            parse_test_msg("recv_double_emoji")?.kind,
+            file.get_msg("recv_double_emoji")?.kind,
             MessageKind::Meable
         ));
         assert!(matches!(
-            parse_test_msg("send_normal")?.kind,
+            file.get_msg("send_normal")?.kind,
             MessageKind::Normal
         ));
         assert!(matches!(
-            parse_test_msg("recv_normal")?.kind,
+            file.get_msg("recv_normal")?.kind,
             MessageKind::Normal
         ));
 
@@ -345,7 +298,9 @@ mod tests {
 
     #[test]
     fn test_parse_attributed_body() -> Result<()> {
-        let row = get_msg_row("recv_single_emoji").unwrap();
+        let file = TestFile::new("tests/messages.json")?;
+
+        let row = file.get_row("send_single_emoji")?;
 
         let body = AttributedBody::parse(row.attributed_body.as_ref().unwrap())?;
 
@@ -369,19 +324,105 @@ mod tests {
         assert!(!is_emoji_only("###"));
     }
 
-    fn get_msg_row(guid: &str) -> Option<&MessageRow> {
-        ROWS.iter().find(|row| row.guid == guid)
+    #[test]
+    fn test_multiple_emoji() -> Result<()> {
+        let file = TestFile::new("tests/emojis.json")?;
+
+        assert!(is_emoji_only(&file.get_msg("one")?.text));
+        assert!(is_emoji_only(&file.get_msg("two")?.text));
+
+        // TODO: we need more info for these...
+        // should be that 1-3 emojis are meable, but 4+ are not since they don't get blown up
+        // this is possibly exposed in message.message_summary_info?
+        // three has spaces, but should still be meable
+        // four has spaces so it's identified as not meable, but if we fix the regex to allow
+        // spaces then it would be meable too when it shouldn't be
+        assert!(is_emoji_only(&file.get_msg("three")?.text));
+        assert!(!is_emoji_only(&file.get_msg("four")?.text));
+
+        Ok(())
     }
 
-    fn parse_test_msg(guid: &str) -> Result<Message> {
-        if let Some(row) = get_msg_row(guid) {
-            let msg: Message = row.try_into()?;
+    struct TestFile {
+        rows: HashMap<String, MessageRow>,
+        msgs: HashMap<String, Message>,
+    }
+
+    impl TestFile {
+        fn new(path: &str) -> Result<Self> {
+            let file = std::fs::File::open(path)?;
+            let stream: Vec<serde_json::Value> = serde_json::from_reader(file)?;
+
+            let rows: HashMap<String, MessageRow> = stream
+                .into_iter()
+                .map(|row| MessageRow {
+                    guid: row
+                        .get("guid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default(),
+                    date: row.get("date").and_then(|v| v.as_i64()),
+                    id: row
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    text: row
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    attributed_body: row
+                        .get("attributedBody")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.strip_prefix("0x").unwrap_or(s))
+                        .map(hex::decode)
+                        .transpose()
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "failed to decode attributed body for guid {}",
+                                row.get("guid")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("<unknown>")
+                            )
+                        }),
+                    has_attachment: row.get("has_attachment").and_then(|v| v.as_i64()),
+                    balloon_bundle_id: row
+                        .get("balloon_bundle_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    thread_originator_guid: row
+                        .get("thread_originator_guid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                })
+                .map(|row| (row.guid.clone(), row))
+                .collect();
+
+            let msgs = rows
+                .iter()
+                .map(|(guid, row)| {
+                    let msg: Message = row.try_into().unwrap();
+                    (guid.clone(), msg)
+                })
+                .collect();
+
+            Ok(Self { rows, msgs })
+        }
+
+        fn get_row(&self, name: &str) -> Result<&MessageRow> {
+            self.rows
+                .get(name)
+                .ok_or_else(|| eyre!("message with guid {} not found", name))
+        }
+
+        fn get_msg(&self, name: &str) -> Result<&Message> {
+            let msg = self
+                .msgs
+                .get(name)
+                .ok_or_else(|| eyre!("message with guid {} not found", name))?;
 
             println!("{:?}", msg);
 
             Ok(msg)
-        } else {
-            Err(eyre!("message with guid {} not found in test data", guid))
         }
     }
 }
