@@ -133,16 +133,16 @@ impl SparkType {
 
 fn is_meable(row: &MessageRow, body: &AttributedBody) -> bool {
     static WORDLE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Wordle \d+ \d").unwrap());
-    static MEABLE_ATTRIBUTES: LazyLock<[HashSet<&'static str>; 5]> = LazyLock::new(|| {
+    static MEABLE_ATTRIBUTES: LazyLock<[HashSet<&'static str>; 3]> = LazyLock::new(|| {
         [
             HashSet::from(["__kIMFileTransferGUIDAttributeName"]), // images/videos/other files
             HashSet::from(["__kIMLinkAttributeName", "__kIMDataDetectedAttributeName"]), // links
-            HashSet::from(["__kIMLinkAttributeName", "__kIMPhoneNumberAttributeName"]), // phone numbers
-            HashSet::from(["__kIMLinkAttributeName", "__kIMAddressAttributeName"]),     // addresses
+            //HashSet::from(["__kIMLinkAttributeName", "__kIMPhoneNumberAttributeName"]), // phone numbers
+            //HashSet::from(["__kIMLinkAttributeName", "__kIMAddressAttributeName"]), // addresses
             HashSet::from([
                 "__kIMBreadcrumbTextMarkerAttributeName",
                 "__kIMBreadcrumbTextOptionFlags",
-            ]), // sent via icloud breadcrumb?
+            ]), // sent via icloud weird files
         ]
     });
 
@@ -175,10 +175,12 @@ pub fn is_emoji_only(text: &str) -> bool {
         Regex::new(r"^(\p{RI}\p{RI}|\p{Emoji}(\p{EMod}|\x{FE0F}\x{20E3}?|[\x{E0020}-\x{E007E}]+\x{E007F})?(\x{200D}\p{Emoji}(\p{EMod}|\x{FE0F}\x{20E3}?|[\x{E0020}-\x{E007E}]+\x{E007F})?)*)+$").unwrap()
     });
 
-    !text
+    let no_whitespace: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+
+    !no_whitespace
         .chars()
         .all(|c| c == '*' || c == '#' || c.is_ascii_digit())
-        && EMOJI_REGEX.is_match(text)
+        && EMOJI_REGEX.is_match(&no_whitespace)
 }
 
 #[derive(Debug)]
@@ -292,6 +294,7 @@ mod tests {
             file.get_msg("recv_normal")?.kind,
             MessageKind::Normal
         ));
+        assert!(matches!(file.get_msg("poll")?.kind, MessageKind::Normal));
 
         Ok(())
     }

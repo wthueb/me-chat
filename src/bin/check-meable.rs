@@ -23,15 +23,16 @@ async fn main() -> Result<()> {
         "__kIMMentionConfirmedMention",
         "__kIMTextBoldAttributeName",
         "__kIMTextEffectAttributeName",
+        "__kIMMoneyAttributeName",
+        "__kIMCalendarEventAttributeName",
+        "__kIMPhoneNumberAttributeName",
+        "__kIMAddressAttributeName",
     ];
 
     // if a message's attributes are exactly these (plus any ignored attributes), it's not meable
     let not_meable_attributes = [
-        HashSet::from(["__kIMCalendarEventAttributeName"]),
-        HashSet::from(["__kIMAddressAttributeName"]),
         HashSet::from(["__kIMDataDetectedAttributeName"]),
         HashSet::from(["__kIMLinkAttributeName"]),
-        HashSet::from(["__kIMMoneyAttributeName"]),
         HashSet::from(["__kIMPhotoSharingAttributeName"]),
         HashSet::from([
             "__kIMOneTimeCodeAttributeName",
@@ -43,8 +44,6 @@ async fn main() -> Result<()> {
     let meable_attributes = [
         HashSet::from(["__kIMFileTransferGUIDAttributeName"]), // images/videos/other files
         HashSet::from(["__kIMLinkAttributeName", "__kIMDataDetectedAttributeName"]), // links
-        HashSet::from(["__kIMLinkAttributeName", "__kIMPhoneNumberAttributeName"]), // phone numbers
-        HashSet::from(["__kIMLinkAttributeName", "__kIMAddressAttributeName"]), // addresses
         HashSet::from([
             "__kIMBreadcrumbTextMarkerAttributeName",
             "__kIMBreadcrumbTextOptionFlags",
@@ -54,9 +53,7 @@ async fn main() -> Result<()> {
     for i in 0..rows.len() {
         let msg = rows.get(i).unwrap();
 
-        if is_emoji_only(&msg.text)
-            || wordle_regex.is_match(&msg.text)
-        {
+        if is_emoji_only(&msg.text) || wordle_regex.is_match(&msg.text) {
             continue;
         }
 
