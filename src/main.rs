@@ -1,14 +1,15 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
+use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
 use chrono_tz::America::New_York;
-use color_eyre::eyre::{Result, eyre};
-use futures::StreamExt;
+use color_eyre::eyre::{self, Result, eyre};
 use gap_check::{
-    db::get_db_query,
-    message::{MeableMessage, MessageKind},
+    gap_check::GapCheck,
+    message::{Message, MessageKind},
     user::get_users,
 };
+use imessage_database::{tables::table::get_connection, util::dirs::default_db_path};
 use indicatif::{ProgressBar, ProgressStyle};
 use tabled::{Table, Tabled};
 
@@ -17,8 +18,7 @@ const MEABLE_TIMEOUT_COUNT: usize = 20;
 const SELF_ME_DELAY: Duration = Duration::from_secs(30);
 const BACKUP_PATH_FORMAT: &str = "./chat.db.since%Y%m%d%H%M.bak";
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     color_eyre::install()?;
     dotenvy::dotenv().ok();
 
@@ -31,19 +31,34 @@ async fn main() -> Result<()> {
     let now = Utc::now().with_timezone(&New_York);
     let mut first_message_date = now;
 
-    let pb = ProgressBar::new_spinner();
+    let db_path = default_db_path();
+
+    let conn = get_connection(&db_path).map_err(|e| eyre!("failed to connect to database: {e}"))?;
+
+    let group_guids = HashSet::from([
+        "647850EE-DD0A-4875-9306-BC6A8E560F16",
+        "C1C65CF7-828E-41EF-91A8-179E80849987",
+        "46324139453632322D394641332D343032442D394433452D413341413544414335313843",
+    ]);
+
+    let gap_check = GapCheck::new(&conn, &group_guids)?;
+
+    let total_messages = gap_check.get_count()?;
+
+    let pb = ProgressBar::new(total_messages.try_into()?);
     pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} [{elapsed_precise}] {human_pos} messages ({per_sec})")
+        ProgressStyle::default_bar()
+            .template("{bar:40.cyan/blue} {pos}/{len} messages ({per_sec})")
             .unwrap(),
     );
-    pb.enable_steady_tick(Duration::from_millis(100));
 
-    let query = get_db_query().await?;
-    let mut stream = query.as_stream();
-
-    while let Some(msg) = stream.next().await.transpose()? {
+    for msg in gap_check.iter_messages()? {
         pb.inc(1);
+        let msg = msg?;
+
+        if matches!(msg.kind, MessageKind::Ignore) {
+            continue;
+        }
 
         meable_msgs.iter_mut().for_each(|m| m.msgs_since += 1);
 
@@ -69,18 +84,15 @@ async fn main() -> Result<()> {
                     user.sparks += 1;
                     last_spark = msg.date.date_naive();
                 }
-                continue;
             }
             MessageKind::SparkCheat => {
                 user.spark_cheats += 1;
-                continue;
             }
-            MessageKind::Meable => {
+            MessageKind::Meable(_) => {
                 user.meable_message_count += 1;
                 // println!("{:?}", msg);
                 meable_msgs.push(msg.try_into().unwrap());
                 possible_mes += MAX_ME_COUNT;
-                continue;
             }
             MessageKind::Me | MessageKind::NotMe => {
                 let mut try_to_me = |meable: &mut MeableMessage| -> Result<bool> {
@@ -124,11 +136,11 @@ async fn main() -> Result<()> {
 
                 let mut med = false;
 
-                if let Some(ref thread_originator_guid) = msg.thread_originator_guid {
+                if let Some(ref thread_originator_guid) = msg.raw.thread_originator_guid {
                     // me is a reply
                     if let Some(meable) = meable_msgs.iter_mut().find(|meable| {
                         &meable.msg.guid == thread_originator_guid
-                            || meable.msg.thread_originator_guid.as_ref()
+                            || meable.msg.raw.thread_originator_guid.as_ref()
                                 == Some(thread_originator_guid)
                     }) {
                         med = try_to_me(meable)?;
@@ -150,16 +162,17 @@ async fn main() -> Result<()> {
                 }
             }
             MessageKind::Normal => {}
+            MessageKind::Ignore => unreachable!(),
         }
     }
 
     pb.finish();
 
     // for meable in &meable_msgs {
-    //     println!("{:?}", meable);
+    //     println!("{meable:?}");
     // }
 
-    println!("gap check since: {}", first_message_date);
+    println!("gap check since: {first_message_date}");
 
     let mut stats: Vec<UserStats> = users
         .by_name
@@ -181,17 +194,37 @@ async fn main() -> Result<()> {
 
     let mut table = Table::new(stats);
     table.with(tabled::settings::Style::modern());
-    println!("{}", table);
+    println!("{table}");
 
     let total_mes: usize = users.by_name.values().map(|u| u.total()).sum();
-    println!("{}/{}", total_mes, possible_mes);
-
-    query.drop().await;
+    println!("{total_mes}/{possible_mes}");
 
     let backup_path = first_message_date.format(BACKUP_PATH_FORMAT).to_string();
-    std::fs::copy(std::env::var("CHAT_DB_PATH").unwrap(), backup_path)?;
+    std::fs::copy(db_path, backup_path)?;
 
     Ok(())
+}
+
+#[derive(Debug)]
+pub struct MeableMessage {
+    pub msg: Message,
+    pub mes: ArrayVec<String, 3>,
+    pub msgs_since: usize,
+}
+
+impl TryFrom<Message> for MeableMessage {
+    type Error = eyre::Report;
+
+    fn try_from(msg: Message) -> Result<MeableMessage> {
+        match msg.kind {
+            MessageKind::Meable(_) => Ok(MeableMessage {
+                msg,
+                mes: ArrayVec::new(),
+                msgs_since: 0,
+            }),
+            _ => Err(eyre!("message is not meable")),
+        }
+    }
 }
 
 #[derive(Tabled)]
