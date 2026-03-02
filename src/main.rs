@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, ops::Deref, time::Duration};
 
 use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
@@ -6,7 +6,7 @@ use chrono_tz::America::New_York;
 use color_eyre::eyre::{self, Result, eyre};
 use gap_check::{
     gap_check::GapCheck,
-    message::{Message, MessageKind},
+    message::{MeableType, Message, MessageKind},
     user::get_users,
 };
 use imessage_database::{tables::table::get_connection, util::dirs::default_db_path};
@@ -174,7 +174,7 @@ fn main() -> Result<()> {
 
     println!("gap check since: {first_message_date}");
 
-    let mut stats: Vec<UserStats> = users
+    let mut stats = users
         .by_name
         .values()
         .map(|user| UserStats {
@@ -188,7 +188,7 @@ fn main() -> Result<()> {
             own_mes: user.own_mes_count,
             own_mes_percent: user.own_mes_percent(),
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     stats.sort_by(|a, b| b.total.cmp(&a.total));
 
@@ -208,6 +208,7 @@ fn main() -> Result<()> {
 #[derive(Debug)]
 pub struct MeableMessage {
     pub msg: Message,
+    pub kind: MeableType,
     pub mes: ArrayVec<String, 3>,
     pub msgs_since: usize,
 }
@@ -216,14 +217,24 @@ impl TryFrom<Message> for MeableMessage {
     type Error = eyre::Report;
 
     fn try_from(msg: Message) -> Result<MeableMessage> {
-        match msg.kind {
-            MessageKind::Meable(_) => Ok(MeableMessage {
+        if let MessageKind::Meable(kind) = msg.kind {
+            Ok(MeableMessage {
                 msg,
+                kind,
                 mes: ArrayVec::new(),
                 msgs_since: 0,
-            }),
-            _ => Err(eyre!("message is not meable")),
+            })
+        } else {
+            Err(eyre!("message is not meable"))
         }
+    }
+}
+
+impl Deref for MeableMessage {
+    type Target = Message;
+
+    fn deref(&self) -> &Self::Target {
+        &self.msg
     }
 }
 

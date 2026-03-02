@@ -27,6 +27,14 @@ pub struct Message {
     pub raw: DbMessage,
 }
 
+impl PartialEq for Message {
+    fn eq(&self, other: &Self) -> bool {
+        self.guid == other.guid
+    }
+}
+
+impl Eq for Message {}
+
 #[derive(Debug)]
 pub enum MessageKind {
     Ignore,
@@ -38,7 +46,7 @@ pub enum MessageKind {
     SparkCheat,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum MeableType {
     Attachment,
     Url,
