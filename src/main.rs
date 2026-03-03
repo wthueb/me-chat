@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use chrono_tz::America::New_York;
 use color_eyre::eyre::{self, Result, eyre};
 use gap_check::{
-    gap_check::GapCheck,
+    db::Db,
     message::{MeableType, Message, MessageKind},
     user::get_users,
 };
@@ -41,9 +41,9 @@ fn main() -> Result<()> {
         "46324139453632322D394641332D343032442D394433452D413341413544414335313843",
     ]);
 
-    let gap_check = GapCheck::new(&conn, &group_guids)?;
+    let db = Db::new(&conn, &group_guids)?;
 
-    let total_messages = gap_check.get_count()?;
+    let total_messages = db.get_count()?;
 
     let pb = ProgressBar::new(total_messages.try_into()?);
     pb.set_style(
@@ -52,7 +52,7 @@ fn main() -> Result<()> {
             .unwrap(),
     );
 
-    for msg in gap_check.iter_messages()? {
+    for msg in db.iter_messages()? {
         pb.inc(1);
         let msg = msg?;
 
@@ -75,7 +75,7 @@ fn main() -> Result<()> {
 
         // println!("{:?}", msg);
         // if msg.text.to_lowercase().contains("spark") {
-        //     println!("{:?}", msg);
+        //     println!("{:?} {}: {}", msg.date, sender, msg.text);
         // }
 
         match msg.kind {

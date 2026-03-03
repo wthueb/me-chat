@@ -15,13 +15,13 @@ use rusqlite::Connection;
 
 use crate::message::Message;
 
-pub struct GapCheck<'a> {
+pub struct Db<'a> {
     conn: &'a Connection,
     query_context: QueryContext,
     handles: HashMap<i32, String>,
 }
 
-impl<'a> GapCheck<'a> {
+impl<'a> Db<'a> {
     pub fn new(conn: &'a Connection, group_guids: &HashSet<&str>) -> Result<Self> {
         let handles = Handle::cache(conn).map_err(|e| eyre!("failed to cache handles: {e}"))?;
 
