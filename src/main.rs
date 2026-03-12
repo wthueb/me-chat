@@ -74,9 +74,9 @@ fn main() -> Result<()> {
         first_message_date = first_message_date.min(msg.date);
 
         // println!("{:?}", msg);
-        // if msg.text.to_lowercase().contains("spark") {
-        //     println!("{:?} {}: {}", msg.date, sender, msg.text);
-        // }
+        if msg.text.to_lowercase().contains("spark") {
+            println!("{:?} {}: {}", msg.date, sender, msg.text);
+        }
 
         match msg.kind {
             MessageKind::Spark => {

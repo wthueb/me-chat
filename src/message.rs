@@ -250,3 +250,20 @@ impl SparkType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_emoji_only() {
+        assert!(is_emoji_only("😀"));
+        assert!(is_emoji_only("😀😀"));
+        assert!(is_emoji_only("😀👩‍👩‍👧‍👦"));
+        assert!(!is_emoji_only("Hello 😀"));
+        assert!(!is_emoji_only("😀 Hello"));
+        assert!(!is_emoji_only("Hello"));
+        assert!(!is_emoji_only("123"));
+        assert!(!is_emoji_only("*#"));
+    }
+}
