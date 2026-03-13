@@ -1,9 +1,9 @@
-use std::{collections::HashSet, ops::Deref, time::Duration};
+use std::{collections::HashSet, ops::Deref, sync::Arc, time::Duration};
 
 use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
 use chrono_tz::America::New_York;
-use color_eyre::eyre::{self, Result, eyre};
+use color_eyre::eyre::{Result, eyre};
 use gap_check::{
     db::Db,
     message::{MeableType, Message, MessageKind},
@@ -54,7 +54,7 @@ fn main() -> Result<()> {
 
     for msg in db.iter_messages()? {
         pb.inc(1);
-        let msg = msg?;
+        let msg = Arc::new(msg?);
 
         if matches!(msg.kind, MessageKind::Ignore) {
             continue;
@@ -74,9 +74,9 @@ fn main() -> Result<()> {
         first_message_date = first_message_date.min(msg.date);
 
         // println!("{:?}", msg);
-        if msg.text.to_lowercase().contains("spark") {
-            println!("{:?} {}: {}", msg.date, sender, msg.text);
-        }
+        // if msg.text.to_lowercase().contains("spark") {
+        //     println!("{:?} {}: {}", msg.date, sender, msg.text);
+        // }
 
         match msg.kind {
             MessageKind::Spark => {
@@ -91,7 +91,7 @@ fn main() -> Result<()> {
             MessageKind::Meable(_) => {
                 user.meable_message_count += 1;
                 // println!("{:?}", msg);
-                meable_msgs.push(msg.try_into().unwrap());
+                meable_msgs.extend(MeableMessage::from_msg(Arc::clone(&msg))?);
                 possible_mes += MAX_ME_COUNT;
             }
             MessageKind::Me | MessageKind::NotMe => {
@@ -207,23 +207,24 @@ fn main() -> Result<()> {
 
 #[derive(Debug)]
 pub struct MeableMessage {
-    pub msg: Message,
+    pub msg: Arc<Message>,
     pub kind: MeableType,
     pub mes: ArrayVec<String, 3>,
     pub msgs_since: usize,
 }
 
-impl TryFrom<Message> for MeableMessage {
-    type Error = eyre::Report;
-
-    fn try_from(msg: Message) -> Result<MeableMessage> {
-        if let MessageKind::Meable(kind) = msg.kind {
-            Ok(MeableMessage {
-                msg,
-                kind,
-                mes: ArrayVec::new(),
-                msgs_since: 0,
-            })
+impl MeableMessage {
+    fn from_msg(msg: Arc<Message>) -> Result<Vec<Self>> {
+        if let MessageKind::Meable(ref meables) = msg.kind {
+            Ok(meables
+                .iter()
+                .map(|kind| MeableMessage {
+                    msg: Arc::clone(&msg),
+                    kind: *kind,
+                    mes: ArrayVec::new(),
+                    msgs_since: 0,
+                })
+                .collect())
         } else {
             Err(eyre!("message is not meable"))
         }

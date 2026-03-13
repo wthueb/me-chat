@@ -5,14 +5,16 @@ use chrono_tz::{America::New_York, Tz};
 use color_eyre::eyre::{Result, eyre};
 use imessage_database::{
     message_types::{
+        app::AppMessage,
         text_effects::TextEffect,
-        variants::{CustomBalloon, Variant},
+        variants::{BalloonProvider as _, CustomBalloon, Variant},
     },
     tables::{
         attachment::Attachment,
         messages::{Message as DbMessage, models::BubbleComponent},
         table::ME,
     },
+    util::plist::parse_ns_keyed_archiver,
 };
 use regex::Regex;
 use rusqlite::Connection;
@@ -41,12 +43,12 @@ pub enum MessageKind {
     Normal,
     Me,
     NotMe,
-    Meable(MeableType),
+    Meable(Vec<MeableType>),
     Spark,
     SparkCheat,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum MeableType {
     Attachment,
     Url,
@@ -67,8 +69,9 @@ impl MessageKind {
             return Ok(MessageKind::Ignore);
         }
 
-        if let Some(meable_type) = MeableType::detect(raw, conn)? {
-            return Ok(MessageKind::Meable(meable_type));
+        let meables = MeableType::detect(raw, conn)?;
+        if !meables.is_empty() {
+            return Ok(MessageKind::Meable(meables));
         }
 
         if let Some(text) = &raw.text {
@@ -98,53 +101,64 @@ impl MessageKind {
 }
 
 impl MeableType {
-    fn detect(raw: &DbMessage, conn: &Connection) -> Result<Option<Self>> {
+    fn detect(raw: &DbMessage, conn: &Connection) -> Result<Vec<Self>> {
         if raw.is_announcement() {
-            return Ok(None);
+            return Ok(vec![]);
         }
 
         let variant = raw.variant();
 
         match variant {
             Variant::App(ref balloon) => match balloon {
-                CustomBalloon::URL => return Ok(Some(Self::Url)),
-                CustomBalloon::Handwriting => return Ok(Some(Self::Handwriting)),
-                CustomBalloon::DigitalTouch => return Ok(Some(Self::DigitalTouch)),
-                CustomBalloon::ApplePay => return Ok(Some(Self::ApplePay)),
-                CustomBalloon::Polls => return Ok(None),
+                CustomBalloon::URL => return Ok(vec![Self::Url]),
+                CustomBalloon::Handwriting => return Ok(vec![Self::Handwriting]),
+                CustomBalloon::DigitalTouch => return Ok(vec![Self::DigitalTouch]),
+                CustomBalloon::ApplePay => return Ok(vec![Self::ApplePay]),
+                CustomBalloon::Polls => return Ok(vec![]),
                 CustomBalloon::Application(bundle_id) => {
                     if *bundle_id == "com.gamerdelights.gamepigeon.ext"
                         || *bundle_id == "com.nearfuturespecialists.imessagepoll.MessagesExtension"
                     {
-                        return Ok(None);
+                        return Ok(vec![]);
                     } else {
-                        return Ok(Some(Self::AppBalloon));
+                        return Ok(vec![Self::AppBalloon]);
                     }
                 }
-                CustomBalloon::Slideshow => return Ok(Some(Self::Attachment)),
+                CustomBalloon::Slideshow => {
+                    let payload = raw
+                        .payload_data(conn)
+                        .ok_or_else(|| eyre!("slideshow balloon missing payload"))?;
+                    let parsed = parse_ns_keyed_archiver(&payload)
+                        .map_err(|e| eyre!("failed to parse slideshow payload: {e}"))?;
+                    let balloon = AppMessage::from_map(&parsed)
+                        .map_err(|e| eyre!("failed to parse slideshow app message: {e}"))?;
+                    println!("got slideshow with balloon: {:#?}", balloon);
+                    return Ok(vec![Self::Attachment]);
+                }
                 CustomBalloon::Fitness | CustomBalloon::CheckIn | CustomBalloon::FindMy => {
                     unimplemented!("{variant:?} {raw:#?}")
                 }
             },
-            Variant::Tapback(..) | Variant::PollUpdate | Variant::Vote => return Ok(None),
+            Variant::Tapback(..) | Variant::PollUpdate | Variant::Vote => return Ok(vec![]),
             Variant::Normal | Variant::Edited | Variant::SharePlay | Variant::Unknown(_) => {}
         }
+
+        let mut meables = Vec::new();
 
         for component in raw.components.iter() {
             match component {
                 BubbleComponent::Text(attributes) => {
-                    let mut urls = attributes
+                    let urls = attributes
                         .iter()
                         .flat_map(|a| &a.effects)
                         .filter_map(|e| match e {
                             TextEffect::Link(url) => Some(url),
                             _ => None,
                         })
-                        .filter(|url| !url.starts_with("tel:"));
+                        .filter(|url| !url.starts_with("tel:"))
+                        .collect::<Vec<_>>();
 
-                    if urls.next().is_some() {
-                        return Ok(Some(Self::Url));
-                    }
+                    meables.extend(std::iter::repeat_n(Self::Url, urls.len()));
                 }
                 BubbleComponent::App
                 | BubbleComponent::Attachment(..)
@@ -154,31 +168,25 @@ impl MeableType {
 
         if let Some(text) = &raw.text {
             if is_emoji_only(text) {
-                return Ok(Some(Self::Emoji));
+                meables.push(Self::Emoji);
             }
 
             static WORDLE_REGEX: LazyLock<Regex> =
                 LazyLock::new(|| Regex::new(r"^Wordle \d+ \d").unwrap());
             if WORDLE_REGEX.is_match(text) {
-                return Ok(Some(Self::Wordle));
+                return Ok(vec![Self::Wordle]);
             }
         }
 
         let attachments = Attachment::from_message(conn, raw)
-            .map_err(|e| eyre!("failed to get attachments for message: {e}"))?;
+            .map_err(|e| eyre!("failed to get attachments for message: {e}"))?
+            .into_iter()
+            .filter(|a| a.hide_attachment == 0 && !a.is_sticker)
+            .collect::<Vec<_>>();
 
-        if attachments
-            .iter()
-            .any(|a| a.hide_attachment == 0 && !a.is_sticker)
-            && raw
-                .balloon_bundle_id
-                .as_ref()
-                .is_none_or(|id| id.ends_with("com.apple.mobileslideshow.PhotosMessagesApp"))
-        {
-            return Ok(Some(Self::Attachment));
-        }
+        meables.extend(std::iter::repeat_n(Self::Attachment, attachments.len()));
 
-        Ok(None)
+        Ok(meables)
     }
 }
 

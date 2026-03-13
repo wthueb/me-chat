@@ -29,17 +29,31 @@ fn assert_meable(
     conn: &rusqlite::Connection,
     handles: &HashMap<i32, String>,
     guid: &str,
-    expected: MeableType,
+    expected: Vec<MeableType>,
 ) {
     let raw = load_message(conn, guid);
     let msg = Message::from_raw(raw, conn, handles).unwrap();
-    assert!(
-        matches!(&msg.kind, MessageKind::Meable(MeableType::Attachment)),
-        "expected Meable({:?}), got {:?} for guid {}",
-        expected,
-        msg.kind,
-        guid
-    );
+
+    if let MessageKind::Meable(types) = msg.kind {
+        let mut expected_counts: HashMap<MeableType, usize> = HashMap::new();
+        for t in expected {
+            *expected_counts.entry(t).or_insert(0) += 1;
+        }
+        let mut actual_counts: HashMap<MeableType, usize> = HashMap::new();
+        for t in types {
+            *actual_counts.entry(t).or_insert(0) += 1;
+        }
+        assert_eq!(
+            expected_counts, actual_counts,
+            "expected {:?}, got {:?} for guid {}",
+            expected_counts, actual_counts, guid
+        );
+    } else {
+        panic!(
+            "expected message to be meable, but got {:?} for guid {}",
+            msg.kind, guid
+        );
+    }
 }
 
 #[allow(dead_code)]
@@ -67,6 +81,6 @@ fn test_multiple_images_is_meable() {
         &conn,
         &handles,
         "C0950D79-397C-462B-983C-600A51F3F1CA",
-        MeableType::Attachment,
+        vec![MeableType::Attachment; 6],
     );
 }
