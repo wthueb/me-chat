@@ -91,8 +91,9 @@ fn main() -> Result<()> {
             MessageKind::Meable(_) => {
                 user.meable_message_count += 1;
                 // println!("{:?}", msg);
-                meable_msgs.extend(MeableMessage::from_msg(Arc::clone(&msg))?);
-                possible_mes += MAX_ME_COUNT;
+                let meable = MeableMessage::from_msg(Arc::clone(&msg))?;
+                possible_mes += meable.len() * MAX_ME_COUNT;
+                meable_msgs.extend(meable);
             }
             MessageKind::Me | MessageKind::NotMe => {
                 let mut try_to_me = |meable: &mut MeableMessage| -> Result<bool> {
