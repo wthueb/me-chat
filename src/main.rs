@@ -36,9 +36,11 @@ fn main() -> Result<()> {
     let conn = get_connection(&db_path).map_err(|e| eyre!("failed to connect to database: {e}"))?;
 
     let group_guids = HashSet::from([
+        "3EC4D9BC-7D9F-448B-9F99-2581159C1175",
+        "46324139453632322D394641332D343032442D394433452D413341413544414335313843",
         "647850EE-DD0A-4875-9306-BC6A8E560F16",
         "C1C65CF7-828E-41EF-91A8-179E80849987",
-        "46324139453632322D394641332D343032442D394433452D413341413544414335313843",
+        "FC2726D0-F5A7-4482-95EC-D82C3B58D299",
     ]);
 
     let db = Db::new(&conn, &group_guids)?;
