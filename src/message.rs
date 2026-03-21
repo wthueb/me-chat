@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::LazyLock};
 
 use chrono::{DateTime, Timelike as _};
 use chrono_tz::{America::New_York, Tz};
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Context as _, Result, eyre};
 use imessage_database::{
     message_types::{
         app::AppMessage,
@@ -129,9 +129,9 @@ impl MeableType {
                         .payload_data(conn)
                         .ok_or_else(|| eyre!("slideshow balloon missing payload"))?;
                     let parsed = parse_ns_keyed_archiver(&payload)
-                        .map_err(|e| eyre!("failed to parse slideshow payload: {e}"))?;
+                        .wrap_err("failed to parse slideshow payload")?;
                     let balloon = AppMessage::from_map(&parsed)
-                        .map_err(|e| eyre!("failed to parse slideshow app message: {e}"))?;
+                        .wrap_err("failed to parse slideshow app message")?;
                     println!("got slideshow with balloon: {:#?}", balloon);
                     return Ok(vec![Self::Attachment]);
                 }
@@ -179,7 +179,7 @@ impl MeableType {
         }
 
         let attachments = Attachment::from_message(conn, raw)
-            .map_err(|e| eyre!("failed to get attachments for message: {e}"))?
+            .wrap_err("failed to get attachments for message")?
             .into_iter()
             .filter(|a| a.hide_attachment == 0 && !a.is_sticker)
             .collect::<Vec<_>>();

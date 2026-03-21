@@ -1,4 +1,4 @@
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Context as _, Result, eyre};
 use imessage_database::util::dirs::default_db_path;
 use rusqlite::{Connection, OpenFlags, params};
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
 
     let source_path = default_db_path();
     let source = Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| eyre!("failed to open source db: {e}"))?;
+        .wrap_err("failed to open source db")?;
 
     let dest_path = Path::new("tests/fixtures.db");
     if dest_path.exists() {
@@ -87,10 +87,10 @@ fn copy_schema(source: &Connection, dest: &Connection) -> Result<()> {
                 params![table],
                 |row| row.get(0),
             )
-            .map_err(|_| eyre!("table '{}' not found in source database", table))?;
+            .wrap_err_with(|| eyre!("table '{table}' not found in source database"))?;
 
         dest.execute(&create_sql, [])
-            .map_err(|e| eyre!("failed to create table '{}': {}", table, e))?;
+            .wrap_err_with(|| eyre!("failed to create table '{table}'"))?;
     }
     Ok(())
 }
@@ -200,7 +200,7 @@ fn copy_row(
                     let old: i64 = row.get(col_idx)?;
                     mapper.get("chat", old).unwrap_or(old).into()
                 }
-                _ => row.get_ref(col_idx)?.into(),
+                _ => row.get_ref(col_idx)?.try_into()?,
             };
             values.push(value);
         }
@@ -244,7 +244,7 @@ fn extract_message(
             params![guid],
             |row| row.get(0),
         )
-        .map_err(|_| eyre!("message not found: {guid}"))?;
+        .wrap_err_with(|| eyre!("message not found: {guid}"))?;
 
     copy_row(
         source,

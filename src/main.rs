@@ -3,7 +3,7 @@ use std::{collections::HashSet, ops::Deref, sync::Arc, time::Duration};
 use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
 use chrono_tz::America::New_York;
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Context as _, Result, eyre};
 use gap_check::{
     db::Db,
     message::{MeableType, Message, MessageKind},
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
 
     let db_path = default_db_path();
 
-    let conn = get_connection(&db_path).map_err(|e| eyre!("failed to connect to database: {e}"))?;
+    let conn = get_connection(&db_path).wrap_err("failed to connect to database")?;
 
     let group_guids = HashSet::from([
         "3EC4D9BC-7D9F-448B-9F99-2581159C1175",

@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Context as _, Result};
 use imessage_database::{
     tables::{
         chat::Chat,
@@ -23,17 +23,17 @@ pub struct Db<'a> {
 
 impl<'a> Db<'a> {
     pub fn new(conn: &'a Connection, group_guids: &HashSet<&str>) -> Result<Self> {
-        let handles = Handle::cache(conn).map_err(|e| eyre!("failed to cache handles: {e}"))?;
+        let handles = Handle::cache(conn).wrap_err("failed to cache handles")?;
 
         let group_ids = Chat::get(conn)
-            .map_err(|e| eyre!("failed to get chats: {e}"))?
+            .wrap_err("failed to get chats")?
             .query_map([], |row| {
                 Ok((
                     row.get::<_, i32>("ROWID")?,
                     row.get::<_, Option<String>>("group_id")?,
                 ))
             })
-            .map_err(|e| eyre!("failed to map chats: {e}"))?
+            .wrap_err("failed to map chats")?
             .filter_map(|res| {
                 if let Ok((id, group_id)) = res
                     && let Some(group_id) = group_id
@@ -59,8 +59,7 @@ impl<'a> Db<'a> {
     }
 
     pub fn get_count(&self) -> Result<i64> {
-        DbMessage::get_count(self.conn, &self.query_context)
-            .map_err(|e| eyre!("failed to count messages: {e}"))
+        DbMessage::get_count(self.conn, &self.query_context).wrap_err("failed to count messages")
     }
 
     pub fn stream<F>(&mut self, mut callback: F) -> Result<()>
@@ -68,14 +67,16 @@ impl<'a> Db<'a> {
         F: FnMut(Result<Message>) -> Result<()>,
     {
         let mut statement = DbMessage::stream_rows(self.conn, &self.query_context)
-            .map_err(|e| eyre!("failed to stream messages: {e}"))?;
+            .wrap_err("failed to stream messages")?;
 
         let messages = statement
             .query_map([], DbMessage::from_row)?
             .filter_map(Result::ok);
 
         for mut raw in messages {
-            let _ = raw.generate_text(self.conn);
+            if let Ok(body) = raw.parse_body(self.conn) {
+                raw.apply_body(body);
+            }
             let msg = Message::from_raw(raw, self.conn, &self.handles);
             callback(msg)?;
         }
@@ -85,14 +86,14 @@ impl<'a> Db<'a> {
 
     pub fn iter_messages(&self) -> Result<MessageIterator<'_>> {
         let statement = DbMessage::stream_rows(self.conn, &self.query_context)
-            .map_err(|e| eyre!("failed to generate messages statement: {e}"))?;
+            .wrap_err("failed to generate messages statement")?;
 
         let inner = MessageIteratorInnerTryBuilder {
             statement,
             rows_builder: |stmt| stmt.query([]),
         }
         .try_build()
-        .map_err(|e| eyre!("failed to create message iterator: {e}"))?;
+        .wrap_err("failed to create message iterator")?;
 
         Ok(MessageIterator {
             inner,
@@ -128,7 +129,9 @@ impl<'a> Iterator for MessageIterator<'a> {
 
         match result {
             Some(Ok(mut raw)) => {
-                let _ = raw.generate_text(self.conn);
+                if let Ok(body) = raw.parse_body(self.conn) {
+                    raw.apply_body(body);
+                }
                 Some(Message::from_raw(raw, self.conn, self.handles))
             }
             Some(Err(e)) => {

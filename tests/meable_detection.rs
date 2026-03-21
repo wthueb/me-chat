@@ -20,7 +20,9 @@ fn load_message(conn: &rusqlite::Connection, guid: &str) -> DbMessage {
     let mut raw = DbMessage::from_guid(guid, conn)
         .unwrap_or_else(|e| panic!("message not found in fixtures.db: {guid} (error: {e})"));
 
-    let _ = raw.generate_text(conn);
+    if let Ok(body) = raw.parse_body(conn) {
+        raw.apply_body(body);
+    }
 
     raw
 }
