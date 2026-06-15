@@ -2,6 +2,7 @@ use std::{collections::HashSet, ops::Deref, sync::Arc, time::Duration};
 
 use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
+use clap::Parser;
 use chrono_tz::America::New_York;
 use color_eyre::eyre::{Context as _, Result, eyre};
 use gap_check::{
@@ -18,9 +19,19 @@ const MEABLE_TIMEOUT_COUNT: usize = 20;
 const SELF_ME_DELAY: Duration = Duration::from_secs(30);
 const BACKUP_PATH_FORMAT: &str = "./chat.db.since%Y%m%d%H%M.bak";
 
+#[derive(Parser)]
+#[command(version)]
+struct Args {
+    /// Print spark timings
+    #[arg(long)]
+    spark: bool,
+}
+
 fn main() -> Result<()> {
     color_eyre::install()?;
     dotenvy::dotenv().ok();
+
+    let args = Args::parse();
 
     let mut users = get_users()?;
 
@@ -77,9 +88,9 @@ fn main() -> Result<()> {
         first_message_date = first_message_date.min(msg.date);
 
         // println!("{:?}", msg);
-        // if msg.text.to_lowercase().contains("spark") {
-        //     println!("{:?} {}: {}", msg.date, sender, msg.text);
-        // }
+        if args.spark && msg.text.to_lowercase().contains("spark") {
+            println!("{:?} {}: {}", msg.date, sender, msg.text);
+        }
 
         match msg.kind {
             MessageKind::Spark => {
@@ -194,7 +205,7 @@ fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    stats.sort_by(|a, b| b.total.cmp(&a.total));
+    stats.sort_by_key(|b| std::cmp::Reverse(b.total));
 
     let mut table = Table::new(stats);
     table.with(tabled::settings::Style::modern());

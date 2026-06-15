@@ -8,6 +8,7 @@ default-run = "gap-check"
 arrayvec = "0.7.6"
 chrono = "0.4"
 chrono-tz = "0.10"
+clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6"
 dotenvy = "0.15"
 imessage-database = "4.0"
