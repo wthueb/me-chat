@@ -2,8 +2,8 @@ use std::{collections::HashSet, ops::Deref, sync::Arc, time::Duration};
 
 use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
-use clap::Parser;
 use chrono_tz::America::New_York;
+use clap::Parser;
 use color_eyre::eyre::{Context as _, Result, eyre};
 use gap_check::{
     db::Db,
@@ -46,14 +46,7 @@ fn main() -> Result<()> {
 
     let conn = get_connection(&db_path).wrap_err("failed to connect to database")?;
 
-    let group_guids = HashSet::from([
-        "0365D034-8096-4BA2-AB2E-DEB4C09E6C9F",
-        "332CD596-0F4F-4561-99BF-F9D0C7B2E62F",
-        "3EC4D9BC-7D9F-448B-9F99-2581159C1175",
-        "44463743413043452D373439332D343539322D414530352D314531344335434233424335",
-        "DDF15AF5-42D3-4D0D-BF74-FE2B6771B878",
-        "FC2726D0-F5A7-4482-95EC-D82C3B58D299",
-    ]);
+    let group_guids: HashSet<&str> = gap_check::COVERED_GROUP_GUIDS.iter().copied().collect();
 
     let db = Db::new(&conn, &group_guids)?;
 

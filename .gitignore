@@ -2,3 +2,4 @@ chat.db*
 users.json
 target/
 .env
+.claude/

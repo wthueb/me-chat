@@ -24,6 +24,10 @@ tabled = "0.20"
 name = "extract-fixtures"
 path = "src/bin/extract_fixtures.rs"
 
+[[bin]]
+name = "find-group-ids"
+path = "src/bin/find_group_ids.rs"
+
 [dev-dependencies]
 hex = "0.4"
 
