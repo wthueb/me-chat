@@ -1,11 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use clap::Parser;
 use color_eyre::eyre::{Context as _, Result};
-use gap_check::{
-    BLACKLISTED_GROUP_GUIDS, COVERED_GROUP_GUIDS,
-    user::{Users, get_users},
-};
 use imessage_database::{
     tables::{
         handle::Handle,
@@ -14,15 +9,18 @@ use imessage_database::{
     },
     util::{dates::get_offset, dirs::default_db_path, query_context::QueryContext},
 };
+use me_chat::{
+    BLACKLISTED_GROUP_GUIDS, GROUP_GUIDS,
+    user::{Users, get_users},
+};
 use rusqlite::Connection;
 use tabled::{Table, Tabled};
 
 /// Find group chats made up *entirely* of known users (from users.json) with at
 /// least N distinct members, so uncovered groups worth adding to the gap check
 /// can be spotted. Groups with any handle that isn't in users.json are skipped.
-#[derive(Parser)]
-#[command(version)]
-struct Args {
+#[derive(clap::Args)]
+pub struct Args {
     /// Minimum number of distinct known members a group must have
     #[arg(long, default_value_t = 4)]
     min_members: usize,
@@ -44,14 +42,9 @@ struct GroupRow {
     names: String,
 }
 
-fn main() -> Result<()> {
-    color_eyre::install()?;
-    dotenvy::dotenv().ok();
-
-    let args = Args::parse();
-
+pub fn run(args: Args) -> Result<()> {
     let users = get_users()?;
-    let covered: HashSet<&str> = COVERED_GROUP_GUIDS.iter().copied().collect();
+    let covered: HashSet<&str> = GROUP_GUIDS.iter().copied().collect();
     let blacklisted: HashSet<&str> = BLACKLISTED_GROUP_GUIDS.iter().copied().collect();
 
     let db_path = default_db_path();

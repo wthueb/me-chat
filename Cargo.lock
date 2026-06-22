@@ -405,27 +405,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
-name = "gap-check"
-version = "0.1.0"
-dependencies = [
- "arrayvec",
- "chrono",
- "chrono-tz",
- "clap",
- "color-eyre",
- "dotenvy",
- "hex",
- "imessage-database",
- "indicatif",
- "ouroboros",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "tabled",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -612,6 +591,27 @@ checksum = "297e814c836ae64db86b36cf2a557ba54368d03f6afcd7d947c266692f71115e"
 dependencies = [
  "byteorder",
  "crc",
+]
+
+[[package]]
+name = "me-chat"
+version = "0.1.0"
+dependencies = [
+ "arrayvec",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "color-eyre",
+ "dotenvy",
+ "hex",
+ "imessage-database",
+ "indicatif",
+ "ouroboros",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tabled",
 ]
 
 [[package]]

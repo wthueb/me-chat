@@ -1,15 +1,15 @@
-use gap_check::message::{MeableType, Message, MessageKind};
 use imessage_database::tables::{
     handle::Handle,
     messages::Message as DbMessage,
     table::{Cacheable, get_connection},
 };
+use me_chat::message::{MeableType, Message, MessageKind};
 use std::collections::HashMap;
 use std::path::Path;
 
 fn setup() -> (rusqlite::Connection, HashMap<i32, String>) {
     let conn = get_connection(Path::new("tests/fixtures.db"))
-        .expect("tests/fixtures.db not found. run `cargo run --bin extract-fixtures` first");
+        .expect("tests/fixtures.db not found. run `cargo run -- extract-fixtures` first");
 
     let handles = Handle::cache(&conn).expect("failed to cache handles from fixtures.db");
 

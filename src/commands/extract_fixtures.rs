@@ -18,9 +18,7 @@ const REQUIRED_TABLES: &[&str] = &[
 
 const SANITIZED_HANDLE: &str = "+10000000000";
 
-fn main() -> Result<()> {
-    color_eyre::install()?;
-
+pub fn run() -> Result<()> {
     if TEST_MESSAGES.is_empty() {
         println!("No messages configured in TEST_MESSAGES.");
         println!("\nTo add test messages:");
@@ -30,8 +28,8 @@ fn main() -> Result<()> {
         println!(
             "     \"SELECT guid, text, balloon_bundle_id FROM message ORDER BY date DESC LIMIT 20\""
         );
-        println!("3. Add them to TEST_MESSAGES in src/bin/extract_fixtures.rs");
-        println!("4. Run: cargo run --bin extract-fixtures");
+        println!("3. Add them to TEST_MESSAGES in src/commands/extract_fixtures.rs");
+        println!("4. Run: cargo run -- extract-fixtures");
         return Ok(());
     }
 
