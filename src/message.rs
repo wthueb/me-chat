@@ -6,7 +6,7 @@ use color_eyre::eyre::{Context as _, Result, eyre};
 use imessage_database::{
     message_types::{
         app::AppMessage,
-        text_effects::TextEffect,
+        text_effects::text_effect::TextEffect,
         variants::{BalloonProvider as _, CustomBalloon, Variant},
     },
     tables::{
@@ -111,6 +111,7 @@ impl MeableType {
         match variant {
             Variant::App(ref balloon) => match balloon {
                 CustomBalloon::URL => return Ok(vec![Self::Url]),
+                CustomBalloon::Business => return Ok(vec![Self::AppBalloon]),
                 CustomBalloon::Handwriting => return Ok(vec![Self::Handwriting]),
                 CustomBalloon::DigitalTouch => return Ok(vec![Self::DigitalTouch]),
                 CustomBalloon::ApplePay => return Ok(vec![Self::ApplePay]),
@@ -147,9 +148,10 @@ impl MeableType {
 
         for component in raw.components.iter() {
             match component {
-                BubbleComponent::Text(attributes) => {
+                BubbleComponent::Run(attributes) => {
                     let urls = attributes
                         .iter()
+                        .filter(|a| !a.is_attachment())
                         .flat_map(|a| &a.effects)
                         .filter_map(|e| match e {
                             TextEffect::Link(url) => Some(url),
@@ -160,9 +162,7 @@ impl MeableType {
 
                     meables.extend(std::iter::repeat_n(Self::Url, urls.len()));
                 }
-                BubbleComponent::App
-                | BubbleComponent::Attachment(..)
-                | BubbleComponent::Retracted => {}
+                BubbleComponent::App | BubbleComponent::Retracted => {}
             }
         }
 

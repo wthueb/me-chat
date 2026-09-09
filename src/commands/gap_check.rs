@@ -76,7 +76,7 @@ pub fn run(args: Args) -> Result<()> {
         first_message_date = first_message_date.min(msg.date);
 
         // println!("{:?}", msg);
-        if args.spark && msg.text.to_lowercase().contains("spark") {
+        if args.spark && msg.text.to_lowercase().trim() == "spark" {
             println!("{:?} {}: {}", msg.date, sender, msg.text);
         }
 
